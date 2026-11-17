@@ -27,7 +27,16 @@ jobs:
       # GitHub Pages serves static files only, so the contact API route is
       # left out of this build; the form hides itself.
       - run: rm -rf src/app/api
-      - run: npm run build
+      # On failure, the last lines of the build log are posted as an
+      # annotation, so the error shows on the run's summary page.
+      - name: Build
+        run: |
+          set -o pipefail
+          if ! npm run build 2>&1 | tee build.log; then
+            msg=$(tail -n 60 build.log | sed -e 's/\x1b\[[0-9;]*m//g' -e 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=next build failed::${msg}"
+            exit 1
+          fi
         env:
           STATIC_EXPORT: "1"
           NEXT_PUBLIC_STATIC_EXPORT: "1"
