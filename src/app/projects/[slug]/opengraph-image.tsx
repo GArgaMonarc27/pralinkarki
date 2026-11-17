@@ -2,6 +2,7 @@ import { projectBySlug, projects } from "@/data/projects";
 import { profile } from "@/data/profile";
 import { SHARE_SIZE, shareImage } from "@/lib/shareImage";
 
+export const dynamic = "force-static";
 export const size = SHARE_SIZE;
 export const contentType = "image/png";
 export const alt = "Project case study";
