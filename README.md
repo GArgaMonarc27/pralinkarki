@@ -1,6 +1,6 @@
 # Pralin Karki — Interactive 3D Portfolio
 
-Next.js (App Router) + TypeScript + Tailwind CSS v4 + React Three Fiber. A world of floating islands at dusk, one per section (Home/About, Projects, Skills, Education, Work, Contact), each clickable, project gallery with case-study pages, a 3D skills orbit, About, and Contact with a working email form.
+Next.js (App Router) + TypeScript + Tailwind CSS v4 + React Three Fiber. A low-poly Himalayan trek at dusk: a trail climbs from a teahouse (About) past a stupa (Skills), a monastery (Education) and a suspension bridge (Work) to base camp (Projects) and the summit (Contact), each clickable, project gallery with case-study pages, a 3D skills orbit, About, and Contact with a working email form.
 
 ## Run it
 
@@ -55,11 +55,12 @@ To test locally, put the same two lines in a file called `.env.local` in the pro
 | Intro timing (all of it) | `src/lib/intro.ts` | SECTION 4 |
 | Text reveal speed | `src/app/globals.css` | SECTION 4 |
 | Loading screen timing | `src/components/ui/LoadingScreen.tsx` | SECTION 4 |
-| Lights (sun, sky, island glows) | `src/components/three/Lighting.tsx` | SECTION 2 |
-| Sky colours, stars, fog, fireflies | `src/components/three/Environment.tsx` | SECTION 2 |
-| Island positions and sizes, camera views and angles | `src/lib/world.ts` | SECTIONS 1 & 3 |
-| What stands on each island, island colours, clouds | `src/components/three/world/Islands.tsx` | SECTION 2 |
-| What each island opens, tooltips | `src/data/hotspots.ts` | SECTION 3 |
+| Lights (sun, sky, campfire, beacon) | `src/components/three/Lighting.tsx` | SECTION 2 |
+| Sky colours, stars, haze, snow | `src/components/three/Environment.tsx` | SECTION 2 |
+| Where each stop sits, the trail, the bridge, mountain shape | `src/lib/terrain.ts` | SECTION 3 |
+| Camera views and angles | `src/lib/world.ts` | SECTION 1 |
+| What stands at each stop, mountain colours, prayer flags, clouds | `src/components/three/world/Himalaya.tsx` | SECTION 2 |
+| What each stop opens, tooltips | `src/data/hotspots.ts` | SECTION 3 |
 | Which 3D scene a project card shows | `src/data/projects.ts` (`visual`: chart, rack, car, gold, printer, boxes, leaf, tee) | SECTION 5 |
 | Skills, descriptions, where used | `src/data/skills.ts` | SECTION 5 |
 | Skills orbits, colours, speeds | `src/components/three/skills/SkillsCanvas.tsx` | SECTION 4 |

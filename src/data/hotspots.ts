@@ -1,7 +1,6 @@
 // ============================================
 // SECTION 3: INTERACTIVE OBJECTS
-// Clickable objects in the room and what they
-// open. Positions live in src/lib/world.ts.
+// The stops on the trek and what they open. Positions live in src/lib/world.ts.
 // ============================================
 
 export type HotspotId = "projects" | "skills" | "education" | "work" | "contact" | "about";
@@ -17,12 +16,12 @@ export type Hotspot = {
 };
 
 export const hotspots: Hotspot[] = [
-  { id: "projects", object: "Screens island", tooltip: "Explore my projects", title: "Projects" },
-  { id: "skills", object: "Crystal island", tooltip: "See my skills", title: "Technical Skills" },
-  { id: "education", object: "Library island", tooltip: "My education", title: "Education" },
-  { id: "work", object: "Beacon island", tooltip: "Work experience", title: "Work Experience" },
-  { id: "contact", object: "Mailbox island", tooltip: "Get in touch", title: "Contact" },
-  { id: "about", object: "Home island", tooltip: "About me", title: "About Me" },
+  { id: "projects", object: "Base camp", tooltip: "Explore my projects", title: "Projects" },
+  { id: "skills", object: "Stupa", tooltip: "See my skills", title: "Technical Skills" },
+  { id: "education", object: "Monastery", tooltip: "My education", title: "Education" },
+  { id: "work", object: "Suspension bridge", tooltip: "Work experience", title: "Work Experience" },
+  { id: "contact", object: "Summit", tooltip: "Get in touch", title: "Contact" },
+  { id: "about", object: "Teahouse", tooltip: "About me", title: "About Me" },
 ];
 
 export const hotspotById = Object.fromEntries(hotspots.map((h) => [h.id, h])) as Record<

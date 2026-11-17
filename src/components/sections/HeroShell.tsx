@@ -7,7 +7,7 @@ import { openExplore } from "@/lib/navigation";
 import { scrollToSection } from "@/lib/scroll";
 import { MagneticButton } from "@/components/ui/MagneticButton";
 
-/** Fades the hero out while the visitor explores the islands. */
+/** Fades the hero out while the visitor explores the trek. */
 export function HeroShell({ children }: { children: ReactNode }) {
   const explore = useSceneStore((s) => s.mode === "explore");
   return (
@@ -66,7 +66,7 @@ export function ExploreHint() {
       style={{ opacity: "var(--hero-fade, 1)" }}
       className="pointer-events-auto absolute right-6 bottom-8 hidden items-center gap-2 font-mono text-[11px] tracking-[0.25em] text-muted uppercase transition-colors hover:text-fg sm:right-12 sm:flex"
     >
-      Click an island to explore <MousePointerClick size={12} aria-hidden className="animate-pulse" />
+      Click a stop on the trail <MousePointerClick size={12} aria-hidden className="animate-pulse" />
     </button>
   );
 }

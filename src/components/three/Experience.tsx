@@ -8,7 +8,7 @@ import { LightDriver, Lighting } from "./Lighting";
 import { Environment } from "./Environment";
 import { IntroBurst } from "./IntroBurst";
 import { LoadTracker, SceneReady } from "./LoadTracker";
-import { Islands } from "./world/Islands";
+import { Himalaya } from "./world/Himalaya";
 import { Effects, RoomReflections } from "./Effects";
 import { useReducedMotion } from "@/hooks/useReducedMotion";
 import { useSceneStore } from "@/stores/useSceneStore";
@@ -16,7 +16,7 @@ import { QUALITY_SETTINGS, detectQuality } from "@/lib/device";
 import { VIEWS } from "@/lib/world";
 
 /**
- * The single WebGL canvas for the whole site: the floating islands.
+ * The single WebGL canvas for the whole site: the Himalayan trek.
  * Later phases add scenes as children here instead of more canvases.
  */
 export default function Experience() {
@@ -47,7 +47,7 @@ export default function Experience() {
       frameloop={paused ? "never" : "always"}
       shadows={settings.shadows ? "percentage" : false}
       gl={{ antialias: quality === "high", powerPreference: "high-performance" }}
-      camera={{ fov: CAMERA_FOV, near: 0.1, far: 200, position: VIEWS.start.pos }}
+      camera={{ fov: CAMERA_FOV, near: 0.1, far: 400, position: VIEWS.start.pos }}
     >
       {/* Drop to low quality if the frame rate stays poor. */}
       <PerformanceMonitor onDecline={() => setQuality("low")} />
@@ -59,7 +59,7 @@ export default function Experience() {
         <CameraController reducedMotion={reducedMotion} />
         <Lighting quality={quality} />
         <Environment particleCount={settings.particles} reducedMotion={reducedMotion} />
-        <Islands reducedMotion={reducedMotion} />
+        <Himalaya reducedMotion={reducedMotion} quality={quality} />
         <RoomReflections />
         {!reducedMotion && <IntroBurst particleCount={settings.burst} />}
         <SceneReady />

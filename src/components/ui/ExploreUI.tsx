@@ -87,12 +87,12 @@ export function ExploreUI() {
       </div>
 
       <nav
-        aria-label="Islands"
+        aria-label="Stops on the trek"
         className="pointer-events-auto absolute inset-x-4 bottom-5 mx-auto max-w-3xl"
       >
         <p className="mx-auto mb-3 w-fit rounded-full bg-bg/80 px-4 py-1.5 text-center font-mono text-[10px] tracking-[0.25em] text-fg/80 uppercase backdrop-blur">
-          <span className="hidden sm:inline">Click an island, or pick one</span>
-          <span className="sm:hidden">Tap an island, or pick one</span>
+          <span className="hidden sm:inline">Click a stop on the trail, or pick one</span>
+          <span className="sm:hidden">Tap a stop, or pick one</span>
         </p>
         <ul className="flex flex-wrap justify-center gap-2">
           {hotspots.map((h) => (

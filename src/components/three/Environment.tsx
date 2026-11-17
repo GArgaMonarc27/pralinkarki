@@ -7,16 +7,16 @@ import { sceneLight } from "./sceneLight";
 
 // ============================================
 // SECTION 2: SKY
-// A dusk gradient dome, stars, distance fog that
-// matches the horizon, and warm fireflies drifting
-// between the islands.
+// A dusk gradient dome with alpenglow on the
+// horizon, stars, distance haze that turns the
+// far peaks blue, and light snow drifting down.
 // ============================================
 const SKY = {
   top: "#060818",
-  middle: "#1a1d44",
-  horizon: "#a8513a",
-  below: "#0c0e22",
-  fog: "#191c3d",
+  middle: "#1c1f4a",
+  horizon: "#c0604a",
+  below: "#141632",
+  fog: "#2a2c58",
 };
 
 const skyVertex = /* glsl */ `
@@ -69,39 +69,50 @@ export function Environment({ particleCount, reducedMotion }: Props) {
     for (let i = 0; i < n; i++) {
       v.randomDirection();
       v.y = Math.abs(v.y) * 0.9 + 0.08;
-      v.normalize().multiplyScalar(70);
+      v.normalize().multiplyScalar(130);
       arr.set([v.x, v.y, v.z], i * 3);
     }
     return arr;
   }, []);
 
-  // Fireflies in the space around the islands.
+  // Snowflakes in a box around the trek; they fall and wrap back to the top.
+  const SNOW = { x: [-14, 16], y: [-3, 15], z: [-20, 10] } as const;
   const flyPositions = useMemo(() => {
-    const arr = new Float32Array(particleCount * 3);
-    for (let i = 0; i < particleCount; i++) {
-      arr[i * 3] = (Math.random() - 0.5) * 20;
-      arr[i * 3 + 1] = -3 + Math.random() * 8;
-      arr[i * 3 + 2] = -9 + Math.random() * 14;
+    const n = particleCount * 2;
+    const arr = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      arr[i * 3] = SNOW.x[0] + Math.random() * (SNOW.x[1] - SNOW.x[0]);
+      arr[i * 3 + 1] = SNOW.y[0] + Math.random() * (SNOW.y[1] - SNOW.y[0]);
+      arr[i * 3 + 2] = SNOW.z[0] + Math.random() * (SNOW.z[1] - SNOW.z[0]);
     }
     return arr;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [particleCount]);
 
   useFrame(({ clock }, delta) => {
     const L = sceneLight.level;
     if (skyMat.current) skyMat.current.uniforms.level.value = L;
     if (stars.current) stars.current.opacity = 0.35 + 0.5 * L;
-    if (fliesMat.current) fliesMat.current.opacity = 0.75 * L;
+    if (fliesMat.current) fliesMat.current.opacity = 0.8 * L;
     if (!flies.current || reducedMotion) return;
-    flies.current.rotation.y += delta * 0.012;
-    flies.current.position.y = Math.sin(clock.elapsedTime * 0.3) * 0.25;
+    const attr = flies.current.geometry.attributes.position as THREE.BufferAttribute;
+    const a = attr.array as Float32Array;
+    const t = clock.elapsedTime;
+    const fall = Math.min(delta, 0.1) * 0.45;
+    for (let i = 0; i < a.length; i += 3) {
+      a[i] += Math.sin(t * 0.6 + i) * fall * 0.6;
+      a[i + 1] -= fall * (0.7 + (i % 7) * 0.08);
+      if (a[i + 1] < SNOW.y[0]) a[i + 1] = SNOW.y[1];
+    }
+    attr.needsUpdate = true;
   });
 
   return (
     <>
       <color attach="background" args={[SKY.below]} />
-      <fog attach="fog" args={[SKY.fog, 20, 62]} />
+      <fog attach="fog" args={[SKY.fog, 28, 110]} />
 
-      <mesh scale={90} renderOrder={-1}>
+      <mesh scale={150} renderOrder={-1}>
         <sphereGeometry args={[1, 32, 16]} />
         <shaderMaterial
           ref={skyMat}
@@ -118,7 +129,7 @@ export function Environment({ particleCount, reducedMotion }: Props) {
         <bufferGeometry>
           <bufferAttribute attach="attributes-position" args={[starPositions, 3]} />
         </bufferGeometry>
-        <pointsMaterial ref={stars} size={0.22} color="#dfe4ff" transparent opacity={0.4} depthWrite={false} fog={false} />
+        <pointsMaterial ref={stars} size={0.4} color="#dfe4ff" transparent opacity={0.4} depthWrite={false} fog={false} />
       </points>
 
       <points ref={flies}>
@@ -127,13 +138,12 @@ export function Environment({ particleCount, reducedMotion }: Props) {
         </bufferGeometry>
         <pointsMaterial
           ref={fliesMat}
-          size={0.06}
-          color="#ffb47a"
+          size={0.05}
+          color="#f4f1ff"
           transparent
           opacity={0}
           depthWrite={false}
-          blending={THREE.AdditiveBlending}
-          sizeAttenuation
+                    sizeAttenuation
         />
       </points>
     </>
