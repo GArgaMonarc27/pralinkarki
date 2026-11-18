@@ -133,9 +133,9 @@ export function terraceAmount(x: number, z: number) {
   return smooth(9.5, 12.5, d) * (1 - smooth(21, 25, d)) * patchy * clear;
 }
 
-const TERRACE_STEP = 0.5;
-/** Where along a terrace step the steep riser starts (0 to 1). */
-export const TERRACE_RISER = 0.76;
+export const TERRACE_STEP = 0.5;
+/** Height of one terrace step, and where along a step the riser starts (0 to 1). */
+export const TERRACE_RISER = 0.8;
 
 /** Ground height before the terraces, trail, stops and ravine are added. */
 function rawHeight(x: number, z: number) {
@@ -154,27 +154,11 @@ function rawHeight(x: number, z: number) {
   return h;
 }
 
-/**
- * Which terrace step (x, z) is on, as a number: the whole part numbers the step,
- * and the fraction is how far up it (treads are below TERRACE_RISER).
- */
-export function terraceLevel(x: number, z: number) {
-  return rawHeight(x, z) / TERRACE_STEP;
-}
-
 /** Ground height before the trail, stops and ravine are carved in. */
 function baseHeight(x: number, z: number) {
-  let h = rawHeight(x, z);
-
-  // Terraced fields: the slope turns into wide steps with short steep risers.
-  const tw = terraceAmount(x, z);
-  if (tw > 0) {
-    const q = h / TERRACE_STEP;
-    const fl = Math.floor(q);
-    const terr = (fl + smooth(TERRACE_RISER, 1, q - fl)) * TERRACE_STEP;
-    h += (terr - h) * 0.9 * tw;
-  }
-  return h;
+  // The hill itself is smooth. The terraces are painted onto it, per pixel, by the
+  // ground shader (see Himalaya.tsx), so their edges stay crisp at any distance.
+  return rawHeight(x, z);
 }
 
 // Read each stop's height from the hill (averaged over its ground), and the

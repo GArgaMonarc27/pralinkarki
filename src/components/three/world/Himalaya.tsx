@@ -5,7 +5,7 @@ import { useFrame } from "@react-three/fiber";
 import { Line, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import { profile } from "@/data/profile";
-import { BRIDGE, DECK_SAG, STOPS, TRAIL, bridgeDeckY, fbm, ridged, smooth, TERRACE_RISER, terraceAmount, terraceLevel, terrainHeight, trailPoint } from "@/lib/terrain";
+import { BRIDGE, DECK_SAG, STOPS, TRAIL, bridgeDeckY, fbm, ridged, smooth, TERRACE_RISER, TERRACE_STEP, terraceAmount, terrainHeight, trailPoint } from "@/lib/terrain";
 import { HoverOutline, Interactive } from "./Interactive";
 import { sceneLight } from "../sceneLight";
 import type { HotspotId } from "@/data/hotspots";
@@ -23,7 +23,7 @@ const C = {
   rock: "#7a7270",
   rockDark: "#5b535a",
   snow: "#eef2fa",
-  earth: "#6f6a3f",
+  earth: "#7a7343",
   nepalRed: "#DC143C",
   nepalBlue: "#003893",
   trail: "#a38b69",
@@ -99,44 +99,146 @@ function nearHeight(x: number, z: number) {
 }
 
 const tmpA = new THREE.Color();
-const tmpB = new THREE.Color();
 
-/** Crops and fields on the terraces: young rice, ripe barley, millet, fallow earth. */
-const CROPS = ["#74a94b", "#83b04e", "#92b752", "#a3b455", "#bdb85a", "#6aa04a"];
+// ---------- The ground shader ----------
+// The hill is a smooth mesh. Its colours are worked out per pixel: grass and
+// meadow by height, bare banded rock where it is steep, snow near the summit,
+// and the farmers' terraces as crisp contour lines. Doing this per pixel (rather
+// than painting colour into the mesh's vertices) keeps every edge sharp however
+// close you get, and means the terraces cost nothing in geometry.
 
-function groundColor(h: number, ny: number, x: number, z: number, snowLine: number, tw: number, level: number, out: THREE.Color) {
-  const n = fbm(x * 0.6 + 11, z * 0.6, 2);
-  const m = fbm(x * 0.11 + 4, z * 0.11 - 7, 2); // broad patches of colour
-  const line = snowLine + n * 1.6;
-  if ((h > line && ny > 0.5) || h > line + 3.5) {
-    out.set(C.snow).offsetHSL(0, 0, n * 0.04);
-  } else {
-    if (tw > 0.25) {
-      // Every terrace is its own field, with its own crop in patches along its length.
-      const step = Math.floor(level);
-      if (level - step < TERRACE_RISER) {
-        const k = fbm(x * 0.2 + step * 2.7, z * 0.2 - step * 1.3, 2);
-        out.set(CROPS[Math.min(CROPS.length - 1, Math.floor(smooth(-0.3, 0.3, k) * CROPS.length))]);
-      } else out.set(C.earth);
-    } else if (h < -3.5) out.set(C.valley);
-    else if (h < 2.4) out.set(C.grass).lerp(tmpA.set(C.olive), smooth(-0.3, 0.5, m) * 0.7);
-    else if (h < 6.4) out.set(C.olive).lerp(tmpA.set(C.meadow), smooth(-0.3, 0.5, m) * 0.8);
-    else out.set(C.scree).lerp(tmpA.set(C.rock), smooth(0.0, 0.5, n));
-    // Steep ground turns to bare rock gradually, with horizontal bands of strata.
-    // (The terraces keep their own colours: their risers are steep on purpose.)
-    const steep = smooth(0.8, 0.52, ny) * (1 - smooth(0.1, 0.4, tw));
-    if (steep > 0) {
-      tmpB.set(C.rock).lerp(tmpA.set(C.rockDark), smooth(-0.2, 0.3, n));
-      tmpB.offsetHSL(0, 0, Math.sin(h * 8 + n * 4) * 0.035);
-      out.lerp(tmpB, steep);
-    }
+/** A colour as a GLSL constant, in the linear space the renderer works in. */
+const glslColor = (hex: string) => {
+  const c = new THREE.Color(hex);
+  return `vec3(${c.r.toFixed(4)}, ${c.g.toFixed(4)}, ${c.b.toFixed(4)})`;
+};
+
+/** Young rice, barley, millet and fallow earth, in a gradient along each terrace. */
+const CROPS = ["#6aa04a", "#74a94b", "#83b04e", "#93b752", "#a8b555", "#bdb85a"];
+
+const GROUND_GLSL = /* glsl */ `
+  const vec3 C_VALLEY = ${glslColor(C.valley)};
+  const vec3 C_GRASS = ${glslColor(C.grass)};
+  const vec3 C_OLIVE = ${glslColor(C.olive)};
+  const vec3 C_MEADOW = ${glslColor(C.meadow)};
+  const vec3 C_SCREE = ${glslColor(C.scree)};
+  const vec3 C_ROCK = ${glslColor(C.rock)};
+  const vec3 C_ROCKD = ${glslColor(C.rockDark)};
+  const vec3 C_SNOW = ${glslColor(C.snow)};
+  const vec3 C_EARTH = ${glslColor(C.earth)};
+  const vec3 C_CROP[6] = vec3[6](${CROPS.map(glslColor).join(", ")});
+  const float TSTEP = ${TERRACE_STEP.toFixed(3)};
+  const float TRISER = ${TERRACE_RISER.toFixed(3)};
+
+  float h21(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
   }
-  return out.offsetHSL(0, 0, n * 0.05 + fbm(x * 1.7, z * 1.7, 2) * 0.03);
+  float vn(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), f.x), mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), f.x), f.y);
+  }
+  float fb(vec2 p) {
+    float s = 0.0, a = 0.5;
+    for (int i = 0; i < 3; i++) { s += a * vn(p); p *= 2.03; a *= 0.5; }
+    return s;
+  }
+
+  /** The crop on terrace number idx: it shifts gradually along the terrace's length. */
+  vec3 cropAt(float idx, vec3 p) {
+    float k = clamp(vn(vec2(idx * 3.1, (p.x + p.z) * 0.2)) * 1.7 - 0.35, 0.0, 0.999) * 5.0;
+    int i = int(floor(k));
+    return mix(C_CROP[i], C_CROP[i + 1], smoothstep(0.0, 1.0, fract(k)));
+  }
+
+  vec3 terrainAlbedo(vec3 p, vec3 n, float ter) {
+    float h = p.y;
+    float ny = n.y;
+    float n1 = fb(p.xz * 0.6 + 11.0) - 0.45;                // fine variation
+    float n2 = fb(p.xz * 0.11 + vec2(4.0, -7.0)) - 0.45;    // broad patches
+
+    // Grass and meadow, by height.
+    vec3 col = C_VALLEY;
+    col = mix(col, mix(C_GRASS, C_OLIVE, smoothstep(-0.3, 0.5, n2) * 0.7), smoothstep(-4.2, -2.8, h));
+    col = mix(col, mix(C_OLIVE, C_MEADOW, smoothstep(-0.3, 0.5, n2) * 0.8), smoothstep(1.8, 3.0, h));
+    col = mix(col, mix(C_SCREE, C_ROCK, smoothstep(0.0, 0.5, n1)), smoothstep(5.6, 7.0, h));
+
+    // Terraced fields: tread, then a short riser, once every TSTEP metres of height.
+    float tm = smoothstep(0.2, 0.5, ter);
+    if (tm > 0.0) {
+      float q = (h + (vn(p.xz * 0.3) - 0.5) * 0.25) / TSTEP;   // contour lines, gently wavy
+      float f = fract(q);
+      float aa = max(fwidth(q) * 1.5, 0.003);                     // stay crisp, never jagged
+      float riser = smoothstep(TRISER - aa, TRISER + aa, f) * (1.0 - smoothstep(1.0 - aa, 1.0, f));
+      vec3 field = cropAt(floor(q), p) * (1.0 + 0.12 * (vn(p.xz * 4.0) - 0.5));
+      col = mix(col, mix(field, C_EARTH, riser), tm);
+    }
+
+    // Steep ground turns to bare rock, with horizontal bands of strata.
+    float steep = (1.0 - smoothstep(0.52, 0.8, ny)) * (1.0 - smoothstep(0.1, 0.4, ter));
+    // Crisp two-tone strata, bent by noise, and cooler (bluer) the higher it is.
+    float strata = smoothstep(0.42, 0.58, vn(vec2(h * 3.4 + n1 * 3.0, (p.x + p.z) * 0.35)));
+    vec3 rock = mix(C_ROCK, C_ROCKD, mix(strata, smoothstep(-0.2, 0.3, n1), 0.35));
+    rock *= mix(vec3(1.0), vec3(0.86, 0.92, 1.06), smoothstep(3.0, 8.0, h));
+    col = mix(col, rock, steep);
+
+    // Snow near the top, except where it is too steep to hold.
+    float line = uSnowLine + n1 * 1.6;
+    float snow = smoothstep(line - 0.25, line + 0.25, h) * smoothstep(0.28, 0.44, ny);
+    snow = max(snow, smoothstep(line + 3.0, line + 3.8, h));
+    col = mix(col, C_SNOW, snow);
+
+    return col * (1.0 + n1 * 0.22 + (vn(p.xz * 3.2) - 0.5) * 0.08);
+  }
+`;
+
+/** The material for the ground. `snowLine` is the height where the snow starts. */
+function groundMaterial(snowLine: number) {
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.95 });
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uSnowLine = { value: snowLine };
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+         attribute float aTer;
+         varying vec3 vTPos;
+         varying vec3 vTNormal;
+         varying float vTer;`,
+      )
+      .replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+         vTPos = position;
+         vTNormal = normal;
+         vTer = aTer;`,
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        "#include <common>",
+        `#include <common>
+         uniform float uSnowLine;
+         varying vec3 vTPos;
+         varying vec3 vTNormal;
+         varying float vTer;
+         ${GROUND_GLSL}`,
+      )
+      .replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+         diffuseColor.rgb = terrainAlbedo(vTPos, normalize(vTNormal), vTer);`,
+      );
+  };
+  mat.customProgramCacheKey = () => `ground-${snowLine}`;
+  return mat;
 }
 
 /**
- * Heightfield with smooth shading and a colour at every point. `skip` leaves
- * out cells (used to cut a hole in the far ground under the near mountain).
+ * A smooth heightfield. Each point also carries how much terraced farmland covers
+ * it (`aTer`), for the shader. `skip` leaves out cells (used to cut a hole in the
+ * far ground under the near mountain).
  */
 function buildGround(
   cx: number,
@@ -144,16 +246,18 @@ function buildGround(
   size: number,
   segs: number,
   height: (x: number, z: number) => number,
-  snowLine: number,
+  terraces: boolean,
   skip?: (x0: number, z0: number, x1: number, z1: number) => boolean,
 ) {
   const n = segs + 1;
   const step = size / segs;
   const pos = new Float32Array(n * n * 3);
+  const ter = new Float32Array(n * n);
   for (let j = 0; j < n; j++)
     for (let i = 0; i < n; i++) {
       const x = cx - size / 2 + i * step, z = cz - size / 2 + j * step;
       pos.set([x, height(x, z), z], (j * n + i) * 3);
+      if (terraces) ter[j * n + i] = terraceAmount(x, z);
     }
   const idx: number[] = [];
   for (let j = 0; j < segs; j++)
@@ -165,38 +269,27 @@ function buildGround(
     }
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  g.setAttribute("aTer", new THREE.BufferAttribute(ter, 1));
   g.setIndex(idx);
   g.computeVertexNormals();
-  const normals = g.attributes.normal;
-  const colors = new Float32Array(n * n * 3);
-  const c = new THREE.Color();
-  for (let v = 0; v < n * n; v++) {
-    const x = pos[v * 3], y = pos[v * 3 + 1], z = pos[v * 3 + 2];
-    const tw = terraceAmount(x, z);
-    groundColor(y, normals.getY(v), x, z, snowLine, tw, tw > 0.25 ? terraceLevel(x, z) : 0, c);
-    colors.set([c.r, c.g, c.b], v * 3);
-  }
-  g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
   return g;
 }
 
 function Ground({ detail }: { detail: number }) {
-  const near = useMemo(() => buildGround(NEAR.cx, NEAR.cz, NEAR.half * 2, detail, nearHeight, 7.6), [detail]);
+  const near = useMemo(() => buildGround(NEAR.cx, NEAR.cz, NEAR.half * 2, detail, nearHeight, true), [detail]);
   const far = useMemo(
     () =>
-      buildGround(NEAR.cx, -16, 180, Math.round(detail * 0.75), farHeight, 11, (x0, z0, x1, z1) =>
+      buildGround(NEAR.cx, -16, 180, Math.round(detail * 0.75), farHeight, false, (x0, z0, x1, z1) =>
         Math.max(boxDist(x0, z0), boxDist(x1, z1), boxDist(x0, z1), boxDist(x1, z0)) < NEAR.half - 1.5,
       ),
     [detail],
   );
+  const nearMat = useMemo(() => groundMaterial(7.6), []);
+  const farMat = useMemo(() => groundMaterial(11), []);
   return (
     <>
-      <mesh geometry={near} receiveShadow castShadow>
-        <meshStandardMaterial vertexColors roughness={0.95} />
-      </mesh>
-      <mesh geometry={far}>
-        <meshStandardMaterial vertexColors roughness={1} />
-      </mesh>
+      <mesh geometry={near} material={nearMat} receiveShadow castShadow />
+      <mesh geometry={far} material={farMat} />
     </>
   );
 }
