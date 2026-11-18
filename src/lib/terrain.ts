@@ -154,10 +154,12 @@ function rawHeight(x: number, z: number) {
   return h;
 }
 
-/** 0 to 1: how far up the current terrace step (x, z) is. Treads are below TERRACE_RISER. */
-export function terraceFraction(x: number, z: number) {
-  const q = rawHeight(x, z) / TERRACE_STEP;
-  return q - Math.floor(q);
+/**
+ * Which terrace step (x, z) is on, as a number: the whole part numbers the step,
+ * and the fraction is how far up it (treads are below TERRACE_RISER).
+ */
+export function terraceLevel(x: number, z: number) {
+  return rawHeight(x, z) / TERRACE_STEP;
 }
 
 /** Ground height before the trail, stops and ravine are carved in. */
@@ -292,26 +294,12 @@ const ON_BRIDGE = TRAIL.map(([x, , z]) => {
 
 // ---------- Height ----------
 
-/** Final ground height at (x, z), including the ravine, the trail and the flat stops. */
-export function terrainHeight(x: number, z: number) {
+/** Ground height with the ravine, stops and bridge landings, but without the trail. */
+function groundNoTrail(x: number, z: number) {
   let h = baseHeight(x, z);
 
   // The ravine under the bridge.
   h -= gorgeAmount(x, z) * BRIDGE.gorgeDepth;
-
-  // Trail: ease the ground toward the path's height near it.
-  let best = Infinity, bestY = 0;
-  for (let i = 0; i < TRAIL.length; i += 2) {
-    if (ON_BRIDGE[i]) continue;
-    const p = TRAIL[i];
-    const dd = (x - p[0]) ** 2 + (z - p[2]) ** 2;
-    if (dd < best) {
-      best = dd;
-      bestY = p[1];
-    }
-  }
-  const trailW = 1 - smooth(0.3, 1.3, Math.sqrt(best));
-  h = h + (bestY - 0.02 - h) * trailW;
 
   // Stops: flat ground, blending back into the slope over a couple of metres.
   for (const id of TRAIL_ORDER) {
@@ -332,6 +320,63 @@ export function terrainHeight(x: number, z: number) {
   }
 
   return h;
+}
+
+// Lay the trail on the ground. Its height follows the hill, smoothed so it
+// does not jump over every bump, which keeps the path, the ground under it and
+// the hiker walking on it all in agreement. (On the bridge it runs straight
+// from one end's height to the other's, and the path eases into that.)
+{
+  const n = TRAIL.length;
+  const bridgeY = (x: number, z: number) => {
+    const { len, along } = bridgeFrame(x, z);
+    return BRIDGE.fromY + (BRIDGE.toY - BRIDGE.fromY) * (along / len + 0.5);
+  };
+  let y = TRAIL.map(([x, , z], i) => (ON_BRIDGE[i] ? bridgeY(x, z) : groundNoTrail(x, z)));
+  for (let pass = 0; pass < 4; pass++) {
+    const next = y.slice();
+    for (let i = 0; i < n; i++) {
+      if (ON_BRIDGE[i]) continue;
+      let sum = 0, count = 0;
+      for (let k = -10; k <= 10; k++) {
+        const j = i + k;
+        if (j < 0 || j >= n) continue;
+        sum += y[j];
+        count++;
+      }
+      next[i] = sum / count;
+    }
+    y = next;
+  }
+  TRAIL.forEach((p, i) => {
+    p[1] = y[i];
+  });
+}
+
+/** Final ground height at (x, z): the hill with the trail eased into it. */
+export function terrainHeight(x: number, z: number) {
+  const h = groundNoTrail(x, z);
+
+  // Trail: ease the ground toward the path's height near it.
+  let best = Infinity, bestY = 0;
+  for (let i = 0; i < TRAIL.length; i += 2) {
+    if (ON_BRIDGE[i]) continue;
+    const p = TRAIL[i];
+    const dd = (x - p[0]) ** 2 + (z - p[2]) ** 2;
+    if (dd < best) {
+      best = dd;
+      bestY = p[1];
+    }
+  }
+  // The last sample is odd-numbered; make sure the path's very end is counted too.
+  const end = TRAIL[TRAIL.length - 1];
+  const de = (x - end[0]) ** 2 + (z - end[2]) ** 2;
+  if (de < best) {
+    best = de;
+    bestY = end[1];
+  }
+  const trailW = 1 - smooth(0.3, 1.3, Math.sqrt(best));
+  return h + (bestY - 0.02 - h) * trailW;
 }
 
 /** Point on the trail at t (0 = teahouse, 1 = summit), just above the ground. */

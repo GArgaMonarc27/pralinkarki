@@ -5,7 +5,7 @@ import { useFrame } from "@react-three/fiber";
 import { Line, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import { profile } from "@/data/profile";
-import { BRIDGE, DECK_SAG, STOPS, TRAIL, bridgeDeckY, fbm, ridged, smooth, TERRACE_RISER, terraceAmount, terraceFraction, terrainHeight, trailPoint } from "@/lib/terrain";
+import { BRIDGE, DECK_SAG, STOPS, TRAIL, bridgeDeckY, fbm, ridged, smooth, TERRACE_RISER, terraceAmount, terraceLevel, terrainHeight, trailPoint } from "@/lib/terrain";
 import { HoverOutline, Interactive } from "./Interactive";
 import { sceneLight } from "../sceneLight";
 import type { HotspotId } from "@/data/hotspots";
@@ -15,17 +15,15 @@ import type { HotspotId } from "@/data/hotspots";
 // Everything is built in code: no model downloads.
 // ============================================
 const C = {
-  valley: "#3f5a42",
-  grass: "#5a7c47",
-  olive: "#6f7a48",
-  meadow: "#847f51",
-  scree: "#867a6c",
-  rock: "#6f6b6e",
-  rockDark: "#4f4b55",
+  valley: "#47664a",
+  grass: "#6a9150",
+  olive: "#86924f",
+  meadow: "#a39a5a",
+  scree: "#97897a",
+  rock: "#7a7270",
+  rockDark: "#5b535a",
   snow: "#eef2fa",
-  cropGreen: "#6a9150",
-  cropGold: "#a9a257",
-  earth: "#66703f",
+  earth: "#6f6a3f",
   nepalRed: "#DC143C",
   nepalBlue: "#003893",
   trail: "#a38b69",
@@ -101,19 +99,38 @@ function nearHeight(x: number, z: number) {
 }
 
 const tmpA = new THREE.Color();
+const tmpB = new THREE.Color();
 
-function groundColor(h: number, ny: number, x: number, z: number, snowLine: number, tw: number, frac: number, out: THREE.Color) {
+/** Crops and fields on the terraces: young rice, ripe barley, millet, fallow earth. */
+const CROPS = ["#74a94b", "#83b04e", "#92b752", "#a3b455", "#bdb85a", "#6aa04a"];
+
+function groundColor(h: number, ny: number, x: number, z: number, snowLine: number, tw: number, level: number, out: THREE.Color) {
   const n = fbm(x * 0.6 + 11, z * 0.6, 2);
   const m = fbm(x * 0.11 + 4, z * 0.11 - 7, 2); // broad patches of colour
   const line = snowLine + n * 1.6;
-  if ((h > line && ny > 0.5) || h > line + 3.5) out.set(C.snow).offsetHSL(0, 0, n * 0.04);
-  else if (ny < 0.6) out.set(n > 0.05 ? C.rock : C.rockDark);
-  else if (tw > 0.25 && frac < TERRACE_RISER) out.set(C.cropGreen).lerp(tmpA.set(C.cropGold), smooth(-0.12, 0.22, m));
-  else if (tw > 0.25) out.set(C.earth);
-  else if (h < -3.5) out.set(C.valley);
-  else if (h < 2.4) out.set(C.grass).lerp(tmpA.set(C.olive), smooth(-0.3, 0.5, m) * 0.7);
-  else if (h < 6.4) out.set(C.olive).lerp(tmpA.set(C.meadow), smooth(-0.3, 0.5, m) * 0.8);
-  else out.set(C.scree).lerp(tmpA.set(C.rock), smooth(0.0, 0.5, n));
+  if ((h > line && ny > 0.5) || h > line + 3.5) {
+    out.set(C.snow).offsetHSL(0, 0, n * 0.04);
+  } else {
+    if (tw > 0.25) {
+      // Every terrace is its own field, with its own crop in patches along its length.
+      const step = Math.floor(level);
+      if (level - step < TERRACE_RISER) {
+        const k = fbm(x * 0.2 + step * 2.7, z * 0.2 - step * 1.3, 2);
+        out.set(CROPS[Math.min(CROPS.length - 1, Math.floor(smooth(-0.3, 0.3, k) * CROPS.length))]);
+      } else out.set(C.earth);
+    } else if (h < -3.5) out.set(C.valley);
+    else if (h < 2.4) out.set(C.grass).lerp(tmpA.set(C.olive), smooth(-0.3, 0.5, m) * 0.7);
+    else if (h < 6.4) out.set(C.olive).lerp(tmpA.set(C.meadow), smooth(-0.3, 0.5, m) * 0.8);
+    else out.set(C.scree).lerp(tmpA.set(C.rock), smooth(0.0, 0.5, n));
+    // Steep ground turns to bare rock gradually, with horizontal bands of strata.
+    // (The terraces keep their own colours: their risers are steep on purpose.)
+    const steep = smooth(0.8, 0.52, ny) * (1 - smooth(0.1, 0.4, tw));
+    if (steep > 0) {
+      tmpB.set(C.rock).lerp(tmpA.set(C.rockDark), smooth(-0.2, 0.3, n));
+      tmpB.offsetHSL(0, 0, Math.sin(h * 8 + n * 4) * 0.035);
+      out.lerp(tmpB, steep);
+    }
+  }
   return out.offsetHSL(0, 0, n * 0.05 + fbm(x * 1.7, z * 1.7, 2) * 0.03);
 }
 
@@ -156,7 +173,7 @@ function buildGround(
   for (let v = 0; v < n * n; v++) {
     const x = pos[v * 3], y = pos[v * 3 + 1], z = pos[v * 3 + 2];
     const tw = terraceAmount(x, z);
-    groundColor(y, normals.getY(v), x, z, snowLine, tw, tw > 0.25 ? terraceFraction(x, z) : 0, c);
+    groundColor(y, normals.getY(v), x, z, snowLine, tw, tw > 0.25 ? terraceLevel(x, z) : 0, c);
     colors.set([c.r, c.g, c.b], v * 3);
   }
   g.setAttribute("color", new THREE.BufferAttribute(colors, 3));

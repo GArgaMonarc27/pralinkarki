@@ -20,8 +20,8 @@ import { scrollState } from "@/lib/scroll";
 // world brighter or darker, change `sun` and `sky`.
 // ============================================
 const LIGHTS = {
-  ambient: { color: "#8f98c8", intensity: 0.35 },
-  sky: { sky: "#aab8ff", ground: "#4a3326", intensity: 1.0 },
+  ambient: { color: "#9aa3cf", intensity: 0.5 },
+  sky: { sky: "#b4c0ff", ground: "#5a4333", intensity: 1.25 },
   sun: { color: "#ffc28a", intensity: 2.6, pos: [11, 9, 9] as [number, number, number] },
   rim: { color: "#7f9cff", intensity: 0.7, pos: [-10, 6, -8] as [number, number, number] },
   /** Campfire at base camp (flickers). */
