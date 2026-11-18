@@ -91,6 +91,13 @@ export const smooth = (e0: number, e1: number, x: number) => {
 
 // ---------- The trail ----------
 
+/** A point on the ground just in front of a stop, where the trail passes by. */
+export function frontOf(id: HotspotId): [number, number, number] {
+  const s = STOPS[id];
+  const d = s.radius + 0.35;
+  return [s.pos[0] + Math.sin(s.face) * d, s.pos[1], s.pos[2] + Math.cos(s.face) * d];
+}
+
 /** Catmull-Rom through the stops, sampled densely. Each point is [x, y, z]. */
 function buildTrail() {
   // The Work stop is the bridge: the trail runs straight across it.
@@ -99,7 +106,7 @@ function buildTrail() {
     if (id === "work") {
       pts.push({ p: [BRIDGE.from[0], BRIDGE.height, BRIDGE.from[1]], bend: false });
       pts.push({ p: [BRIDGE.to[0], BRIDGE.height, BRIDGE.to[1]], bend: true });
-    } else pts.push({ p: STOPS[id].pos, bend: true });
+    } else pts.push({ p: frontOf(id), bend: true });
   }
   // Extra bends between stops so the path winds instead of running straight.
   const ctrl: [number, number, number][] = [];
@@ -110,7 +117,7 @@ function buildTrail() {
       const side = i % 2 === 0 ? 1 : -1;
       const dx = bx - ax, dz = bz - az;
       const len = Math.hypot(dx, dz) || 1;
-      ctrl.push([(ax + bx) / 2 + (-dz / len) * 1.1 * side, (ay + by) / 2, (az + bz) / 2 + (dx / len) * 1.1 * side]);
+      ctrl.push([(ax + bx) / 2 + (-dz / len) * 0.8 * side, (ay + by) / 2, (az + bz) / 2 + (dx / len) * 0.8 * side]);
     }
   }
   const out: [number, number, number][] = [];
@@ -148,16 +155,46 @@ function gorgeAmount(x: number, z: number) {
 
 const SUMMIT = STOPS.contact.pos;
 
+/**
+ * How high the mountain is at each distance from the summit, in [distance,
+ * height] pairs. The stops sit on this curve, so the slope rises smoothly
+ * from one to the next instead of each stop standing on its own pillar.
+ */
+const PROFILE: Array<[number, number]> = [
+  [0, 9.9],
+  [2.6, 7.6],
+  [5.3, 5.6],
+  [7.8, 4.1],
+  [11.3, 2.7],
+  [14.2, 1.3],
+  [17.2, 0.0],
+  [20.5, -1.9],
+  [24, -4.0],
+  [30, -6.5],
+];
+
+function profileAt(d: number) {
+  for (let i = 1; i < PROFILE.length; i++) {
+    const [d1, h1] = PROFILE[i];
+    if (d <= d1) {
+      const [d0, h0] = PROFILE[i - 1];
+      return h0 + ((h1 - h0) * (d - d0)) / (d1 - d0);
+    }
+  }
+  return PROFILE[PROFILE.length - 1][1];
+}
+
 /** Ground height before the trail and stops are carved in. */
 function baseHeight(x: number, z: number) {
-  // The main peak, with ridges running down from it.
   const dx = x - SUMMIT[0], dz = z - SUMMIT[2];
-  const d = Math.hypot(dx, dz);
-  const massif = 11 * Math.exp(-Math.pow(d / 11, 1.6));
-  const ridges = ridged(x * 0.16 + 3.1, z * 0.16 - 1.7) * 2.2 * Math.exp(-d / 12);
-  // Valley floor, sinking toward the edges (into the clouds).
-  const valley = -3.2 + fbm(x * 0.12, z * 0.12) * 1.4;
-  return Math.max(valley, valley + massif + ridges - 1.2) + fbm(x * 0.5, z * 0.5, 3) * 0.35;
+  // Warp the distance a little so the mountain isn't a perfect cone.
+  const warp = 1 + fbm(x * 0.07 + 5, z * 0.07 - 2, 2) * 0.22;
+  const d = Math.hypot(dx, dz) * warp;
+  const slope = profileAt(d);
+  // Broad, rolling shoulders and gullies; soft rather than spiky.
+  const roll = fbm(x * 0.16, z * 0.16, 3) * 0.9;
+  const shoulders = (ridged(x * 0.09 + 3.1, z * 0.09 - 1.7, 2) - 0.35) * 1.3 * smooth(1, 6, d);
+  return slope + roll + shoulders;
 }
 
 /** Final ground height at (x, z), including the flat stops, the trail and the gorge. */
@@ -174,7 +211,7 @@ export function terrainHeight(x: number, z: number) {
       bestY = p[1];
     }
   }
-  const trailW = 1 - smooth(0.35, 1.6, Math.sqrt(best));
+  const trailW = 1 - smooth(0.3, 1.3, Math.sqrt(best));
   h = h + (bestY - 0.02 - h) * trailW;
 
   // Stops: flat ground, blending out over a couple of metres.
@@ -182,7 +219,7 @@ export function terrainHeight(x: number, z: number) {
     if (id === "work") continue; // the bridge itself; its ends are below
     const s = STOPS[id];
     const dist = Math.hypot(x - s.pos[0], z - s.pos[2]);
-    const w = 1 - smooth(s.radius, s.radius + 1.8, dist);
+    const w = 1 - smooth(s.radius + 0.2, s.radius + 2.2, dist);
     h = h + (s.pos[1] - 0.02 - h) * w;
   }
 
@@ -197,6 +234,24 @@ export function terrainHeight(x: number, z: number) {
   if (g > 0) h -= g * BRIDGE.gorgeDepth;
 
   return h;
+}
+
+/** How far the bridge deck sags at its middle. */
+export const DECK_SAG = 0.42;
+
+/**
+ * If (x, z) is on the bridge, the deck's height there; otherwise null.
+ * The deck sags in a curve between its two ends.
+ */
+export function bridgeDeckY(x: number, z: number): number | null {
+  const [ax, az] = BRIDGE.from, [bx, bz] = BRIDGE.to;
+  const dx = bx - ax, dz = bz - az;
+  const len2 = dx * dx + dz * dz;
+  const t = ((x - ax) * dx + (z - az) * dz) / len2;
+  if (t < 0.02 || t > 0.98) return null;
+  const across = Math.abs(((x - ax) * -dz + (z - az) * dx) / Math.sqrt(len2));
+  if (across > 0.5) return null;
+  return BRIDGE.height - DECK_SAG * 4 * t * (1 - t);
 }
 
 /** Point on the trail at t (0 = teahouse, 1 = summit), just above the ground. */

@@ -5,7 +5,7 @@ import { useFrame } from "@react-three/fiber";
 import { Line, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import { profile } from "@/data/profile";
-import { BRIDGE, STOPS, TRAIL, fbm, ridged, smooth, terrainHeight, trailPoint } from "@/lib/terrain";
+import { BRIDGE, DECK_SAG, STOPS, TRAIL, bridgeDeckY, fbm, ridged, smooth, terrainHeight, trailPoint } from "@/lib/terrain";
 import { HoverOutline, Interactive } from "./Interactive";
 import { sceneLight } from "../sceneLight";
 import type { HotspotId } from "@/data/hotspots";
@@ -71,7 +71,8 @@ function farHeight(x: number, z: number) {
   const d = Math.hypot(x - NEAR.cx, (z - NEAR.cz) * 0.85);
   const ring = smooth(25, 42, d);
   const front = 1 - smooth(-6, 16, z); // keep the view open toward the camera
-  const peaks = 2 + ridged(x * 0.045 + 7, z * 0.045 - 3, 5) * 19 + fbm(x * 0.15, z * 0.15) * 2;
+  // Rounded shoulders with a few sharper summits on top.
+  const peaks = 2 + (ridged(x * 0.04 + 7, z * 0.04 - 3, 3) * 0.55 + (fbm(x * 0.05, z * 0.05, 3) + 0.5) * 0.6) * 17;
   return -8 + ring * front * peaks;
 }
 
@@ -206,33 +207,148 @@ function Trail() {
   );
 }
 
-/** A lone trekker's head-torch, walking up the trail and back down, forever. */
-function Trekker({ still }: { still: boolean }) {
-  const ref = useRef<THREE.Group>(null);
-  const light = useRef<THREE.PointLight>(null);
-  const p = useMemo<V3>(() => [0, 0, 0], []);
-  useFrame(({ clock }) => {
-    if (!ref.current) return;
-    const T = 90; // seconds for a round trip
-    const u = still ? 0.12 : (clock.elapsedTime % T) / T;
-    const t = u < 0.5 ? u * 2 : 2 - u * 2;
-    trailPoint(t, p);
-    const ground = onBridge(p) ? p[1] : terrainHeight(p[0], p[2]);
-    ref.current.position.set(p[0], ground + 0.32 + Math.abs(Math.sin(clock.elapsedTime * 6)) * 0.02, p[2]);
-    if (light.current) light.current.intensity = 1.6 * sceneLight.level;
-  });
+const HIKER = {
+  /** Seconds for a full trip up to the summit and back down. */
+  roundTrip: 110,
+  /** Seconds the hiker rests at each end. */
+  rest: 4,
+  jacket: "#d6452f",
+  trousers: "#33384d",
+  pack: "#e8a33a",
+  mat: "#2f6fd6",
+  skin: "#c08a62",
+  hat: "#2f9a55",
+  boots: "#4a3222",
+};
+
+/** One leg or arm: a limb hanging from a pivot, so it can swing. */
+function Limb({ pivot, length, width, color, foot, limbRef }: { pivot: V3; length: number; width: number; color: string; foot?: string; limbRef: React.RefObject<THREE.Group | null> }) {
   return (
-    <group ref={ref}>
-      <mesh>
-        <sphereGeometry args={[0.045, 8, 8]} />
-        <meshBasicMaterial color="#fff1d6" toneMapped={false} />
+    <group ref={limbRef} position={pivot}>
+      <mesh position-y={-length / 2} castShadow>
+        <boxGeometry args={[width, length, width]} />
+        <meshStandardMaterial color={color} roughness={0.85} flatShading />
       </mesh>
-      {/* The walker: a small dark figure under the torch. */}
-      <mesh position-y={-0.16}>
-        <capsuleGeometry args={[0.05, 0.14, 2, 6]} />
-        <meshStandardMaterial color="#2a2530" />
-      </mesh>
-      <pointLight ref={light} color="#ffe2b0" distance={2.2} decay={2} intensity={0} />
+      {foot && (
+        <mesh position={[0, -length + 0.012, 0.012]} castShadow>
+          <boxGeometry args={[width * 1.15, 0.026, width * 1.6]} />
+          <meshStandardMaterial color={foot} roughness={0.9} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+/**
+ * A trekker with a big pack and a head-torch, walking the trail up to the
+ * summit and back down, with a rest at each end. Legs and arms swing as they
+ * walk, they lean into the climb and turn to face the way they're going.
+ */
+function Hiker({ still }: { still: boolean }) {
+  const root = useRef<THREE.Group>(null);
+  const body = useRef<THREE.Group>(null);
+  const legL = useRef<THREE.Group>(null);
+  const legR = useRef<THREE.Group>(null);
+  const armL = useRef<THREE.Group>(null);
+  const armR = useRef<THREE.Group>(null);
+  const torch = useRef<THREE.PointLight>(null);
+  const p = useMemo<V3>(() => [0, 0, 0], []);
+  const q = useMemo<V3>(() => [0, 0, 0], []);
+  const yaw = useRef(0);
+
+  useFrame(({ clock }) => {
+    if (!root.current) return;
+    const { roundTrip: T, rest } = HIKER;
+    const walk = T / 2 - rest;
+    const time = still ? T * 0.1 : clock.elapsedTime % T;
+    // Up for `walk` seconds, rest, down for `walk` seconds, rest.
+    let t: number, dir: 1 | -1, moving = true;
+    if (time < walk) (t = time / walk), (dir = 1);
+    else if (time < walk + rest) (t = 1), (dir = 1), (moving = false);
+    else if (time < walk * 2 + rest) (t = 1 - (time - walk - rest) / walk), (dir = -1);
+    else (t = 0), (dir = -1), (moving = false);
+    t = Math.min(0.995, Math.max(0.005, t));
+
+    trailPoint(t, p);
+    trailPoint(t + 0.004 * dir, q);
+    const deck = bridgeDeckY(p[0], p[2]);
+    const ground = deck ?? terrainHeight(p[0], p[2]);
+    root.current.position.set(p[0], ground, p[2]);
+
+    // Face the way they're walking (smoothly, so corners don't snap).
+    const want = Math.atan2(q[0] - p[0], q[2] - p[2]);
+    let diff = want - yaw.current;
+    diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+    yaw.current += diff * 0.12;
+    root.current.rotation.y = yaw.current;
+
+    // Walk cycle.
+    const phase = clock.elapsedTime * 7;
+    const swing = moving && !still ? Math.sin(phase) * 0.55 : 0;
+    if (legL.current) legL.current.rotation.x = swing;
+    if (legR.current) legR.current.rotation.x = -swing;
+    if (armL.current) armL.current.rotation.x = -swing * 0.8;
+    if (armR.current) armR.current.rotation.x = swing * 0.6 - 0.25;
+    if (body.current) {
+      const climb = q[1] - p[1];
+      body.current.rotation.x = moving ? 0.12 + Math.max(-0.1, Math.min(0.15, climb * 8)) : 0.04;
+      body.current.position.y = moving && !still ? Math.abs(Math.cos(phase)) * 0.01 : 0;
+    }
+    if (torch.current) torch.current.intensity = 1.4 * sceneLight.level;
+  });
+
+  return (
+    <group ref={root}>
+      <Limb limbRef={legL} pivot={[-0.032, 0.2, 0]} length={0.2} width={0.045} color={HIKER.trousers} foot={HIKER.boots} />
+      <Limb limbRef={legR} pivot={[0.032, 0.2, 0]} length={0.2} width={0.045} color={HIKER.trousers} foot={HIKER.boots} />
+      <group ref={body} >
+        <group position-y={0.2}>
+          {/* Jacket */}
+          <mesh position-y={0.085} castShadow>
+            <boxGeometry args={[0.13, 0.17, 0.08]} />
+            <meshStandardMaterial color={HIKER.jacket} roughness={0.8} flatShading />
+          </mesh>
+          {/* Backpack with a rolled sleeping mat */}
+          <mesh position={[0, 0.1, -0.075]} castShadow>
+            <boxGeometry args={[0.11, 0.17, 0.07]} />
+            <meshStandardMaterial color={HIKER.pack} roughness={0.8} flatShading />
+          </mesh>
+          <mesh position={[0, 0.2, -0.075]} rotation-z={Math.PI / 2} castShadow>
+            <cylinderGeometry args={[0.025, 0.025, 0.14, 8]} />
+            <meshStandardMaterial color={HIKER.mat} roughness={0.8} />
+          </mesh>
+          {/* Head, beanie and head-torch */}
+          <mesh position-y={0.22} castShadow>
+            <sphereGeometry args={[0.045, 10, 8]} />
+            <meshStandardMaterial color={HIKER.skin} roughness={0.8} />
+          </mesh>
+          <mesh position-y={0.24}>
+            <sphereGeometry args={[0.048, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2]} />
+            <meshStandardMaterial color={HIKER.hat} roughness={0.9} />
+          </mesh>
+          <mesh position-y={0.295}>
+            <sphereGeometry args={[0.014, 6, 6]} />
+            <meshStandardMaterial color="#f2efe6" />
+          </mesh>
+          <mesh position={[0, 0.235, 0.044]}>
+            <sphereGeometry args={[0.012, 6, 6]} />
+            <meshBasicMaterial color="#fff1d6" toneMapped={false} />
+          </mesh>
+          <pointLight ref={torch} position={[0, 0.25, 0.2]} color="#ffe2b0" distance={1.6} decay={2} intensity={0} />
+          {/* Arms; the right hand holds a trekking pole */}
+          <Limb limbRef={armL} pivot={[-0.082, 0.16, 0]} length={0.15} width={0.035} color={HIKER.jacket} />
+          <group ref={armR} position={[0.082, 0.16, 0]}>
+            <mesh position-y={-0.075} castShadow>
+              <boxGeometry args={[0.035, 0.15, 0.035]} />
+              <meshStandardMaterial color={HIKER.jacket} roughness={0.85} flatShading />
+            </mesh>
+            <mesh position={[0, -0.2, 0.03]} rotation-x={0.15}>
+              <cylinderGeometry args={[0.006, 0.006, 0.34, 4]} />
+              <meshStandardMaterial color="#9a9aa2" metalness={0.6} roughness={0.4} />
+            </mesh>
+          </group>
+        </group>
+      </group>
     </group>
   );
 }
@@ -474,6 +590,11 @@ function Teahouse({ still }: { still: boolean }) {
   return (
     <>
       <group position={[-0.25, 0, -0.35]}>
+        {/* Stone foundation, sunk into the slope so the house never floats */}
+        <mesh position-y={-0.45} receiveShadow>
+          <boxGeometry args={[1.75, 0.94, 1.2]} />
+          <meshStandardMaterial color={C.rock} roughness={1} flatShading />
+        </mesh>
         {/* Walls */}
         <mesh position-y={0.45} castShadow receiveShadow>
           <boxGeometry args={[1.6, 0.9, 1.05]} />
@@ -580,6 +701,11 @@ function Stupa({ still }: { still: boolean }) {
   const top: V3 = [0, 2.05, 0];
   return (
     <>
+      {/* Stone platform sunk into the ground */}
+      <mesh position-y={-0.5} receiveShadow>
+        <boxGeometry args={[1.7, 1.0, 1.7]} />
+        <meshStandardMaterial color={C.rock} roughness={1} flatShading />
+      </mesh>
       {/* Stepped base */}
       {[
         [1.5, 0.18],
@@ -668,6 +794,10 @@ function Gompa({ still }: { still: boolean }) {
   return (
     <>
       <group position={[0, 0, -0.2]}>
+        <mesh position-y={-0.45} receiveShadow>
+          <boxGeometry args={[1.65, 0.94, 1.15]} />
+          <meshStandardMaterial color={C.rock} roughness={1} flatShading />
+        </mesh>
         <mesh position-y={0.45} castShadow receiveShadow>
           <boxGeometry args={[1.5, 0.9, 1.0]} />
           <meshStandardMaterial color={C.whitewash} roughness={0.9} flatShading />
@@ -761,7 +891,7 @@ function Bridge({ still }: { still: boolean }) {
     const ux = (bx - ax) / len, uz = (bz - az) / len;
     const nx = -uz, nz = ux;
     const W = 0.32;
-    const POST = 0.95, CABLE_SAG = 0.75, DECK_SAG = 0.42;
+    const POST = 0.95, CABLE_SAG = 0.75;
     const deck = (t: number): V3 => [ax + (bx - ax) * t, -DECK_SAG * 4 * t * (1 - t), az + (bz - az) * t];
     const cable = (side: number, t: number): V3 => [
       ax + (bx - ax) * t + nx * W * side,
@@ -1096,7 +1226,7 @@ export function Himalaya({ reducedMotion, quality }: { reducedMotion: boolean; q
     <>
       <Ground detail={high ? 180 : 110} />
       <Trail />
-      <Trekker still={still} />
+      <Hiker still={still} />
       <Forest count={high ? 260 : 140} />
       <CloudSea still={still} />
 
