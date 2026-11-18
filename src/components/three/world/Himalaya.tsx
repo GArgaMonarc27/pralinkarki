@@ -5,9 +5,10 @@ import { useFrame } from "@react-three/fiber";
 import { Line, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import { profile } from "@/data/profile";
-import { BRIDGE, DECK_SAG, STOPS, TRAIL, bridgeDeckY, fbm, ridged, smooth, TERRACE_RISER, TERRACE_STEP, terraceAmount, terrainHeight, trailPoint } from "@/lib/terrain";
+import { BRIDGE, DECK_SAG, STOPS, TRAIL, bridgeDeckY, fbm, isBlocked, ridged, smooth, TERRACE_RISER, TERRACE_STEP, terraceAmount, terrainHeight, trailPoint } from "@/lib/terrain";
 import { HoverOutline, Interactive } from "./Interactive";
 import { sceneLight } from "../sceneLight";
+import { Stream, Village, Yaks } from "./Life";
 import type { HotspotId } from "@/data/hotspots";
 
 // ============================================
@@ -1453,7 +1454,7 @@ function Forest({ count }: { count: number }) {
       if (rnd() > 1 - smooth(2.5, 6.4, h) || terraceAmount(x, z) > 0.2) continue;
       const slope = Math.abs(nearHeight(x + 0.3, z) - h) + Math.abs(nearHeight(x, z + 0.3) - h);
       if (slope > 0.5) continue;
-      let clear = true;
+      let clear = !isBlocked(x, z);
       for (let i = 0; i < TRAIL.length && clear; i += 3) if (Math.hypot(x - TRAIL[i][0], z - TRAIL[i][2]) < 0.75) clear = false;
       for (const s of Object.values(STOPS)) if (Math.hypot(x - s.pos[0], z - s.pos[2]) < s.radius + 0.5) clear = false;
       if (!clear) continue;
@@ -1511,7 +1512,7 @@ function Boulders({ count }: { count: number }) {
       if (h < -3 || h > 7) continue;
       const slope = Math.abs(nearHeight(x + 0.3, z) - h) + Math.abs(nearHeight(x, z + 0.3) - h);
       if (slope < 0.28 || terraceAmount(x, z) > 0.2) continue;
-      let clear = true;
+      let clear = !isBlocked(x, z);
       for (let i = 0; i < TRAIL.length && clear; i += 3) if (Math.hypot(x - TRAIL[i][0], z - TRAIL[i][2]) < 0.6) clear = false;
       for (const st of Object.values(STOPS)) if (Math.hypot(x - st.pos[0], z - st.pos[2]) < st.radius + 0.4) clear = false;
       if (!clear) continue;
@@ -1558,7 +1559,7 @@ function Shrubs({ count }: { count: number }) {
       if (h < -2.5 || h > 7.2 || terraceAmount(x, z) > 0.3) continue;
       const slope = Math.abs(nearHeight(x + 0.3, z) - h) + Math.abs(nearHeight(x, z + 0.3) - h);
       if (slope > 0.55) continue;
-      let clear = true;
+      let clear = !isBlocked(x, z);
       for (let i = 0; i < TRAIL.length && clear; i += 3) if (Math.hypot(x - TRAIL[i][0], z - TRAIL[i][2]) < 0.5) clear = false;
       for (const st of Object.values(STOPS)) if (Math.hypot(x - st.pos[0], z - st.pos[2]) < st.radius + 0.3) clear = false;
       if (!clear) continue;
@@ -1626,6 +1627,9 @@ export function Himalaya({ reducedMotion, quality }: { reducedMotion: boolean; q
       <Ground detail={high ? 180 : 110} />
       <Trail />
       <Hiker still={still} />
+      <Stream still={still} />
+      <Village still={still} />
+      <Yaks still={still} />
       <Forest count={high ? 520 : 260} />
       <Boulders count={high ? 140 : 70} />
       <Shrubs count={high ? 150 : 70} />

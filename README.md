@@ -60,6 +60,8 @@ To test locally, put the same two lines in a file called `.env.local` in the pro
 | Where each stop sits, the trail, the bridge, mountain shape | `src/lib/terrain.ts` | SECTION 3 |
 | Camera views and angles | `src/lib/world.ts` | SECTION 1 |
 | What stands at each stop, mountain colours, prayer flags, clouds | `src/components/three/world/Himalaya.tsx` | SECTION 2 |
+| Stream and waterfall, village houses, the yak caravan | `src/components/three/world/Life.tsx` | SECTION 2 |
+| Where houses are placed, where the stream runs | `src/lib/terrain.ts` | SECTION 3 |
 | What each stop opens, tooltips | `src/data/hotspots.ts` | SECTION 3 |
 | Which 3D scene a project card shows | `src/data/projects.ts` (`visual`: chart, rack, car, gold, printer, boxes, leaf, tee) | SECTION 5 |
 | Skills, descriptions, where used | `src/data/skills.ts` | SECTION 5 |

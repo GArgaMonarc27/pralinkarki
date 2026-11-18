@@ -130,6 +130,7 @@ export function terraceAmount(x: number, z: number) {
     clear = Math.min(clear, smooth(s.radius + 0.6, s.radius + 2.8, Math.hypot(x - s.pos[0], z - s.pos[2])));
   }
   for (const [bx, bz] of [BRIDGE.from, BRIDGE.to]) clear = Math.min(clear, smooth(1.5, 3.5, Math.hypot(x - bx, z - bz)));
+  for (const hm of HOMES) clear = Math.min(clear, smooth(HOME_RADIUS + 0.2, HOME_RADIUS + 1.6, Math.hypot(x - hm.pos[0], z - hm.pos[2])));
   return smooth(9.5, 12.5, d) * (1 - smooth(21, 25, d)) * patchy * clear;
 }
 
@@ -294,6 +295,12 @@ function groundNoTrail(x: number, z: number) {
     h = h + (s.pos[1] - 0.02 - h) * w;
   }
 
+  // House plots: flat ground, blending back into the slope.
+  for (const hm of HOMES) {
+    const w = 1 - smooth(HOME_RADIUS + 0.1, HOME_RADIUS + 1.2, Math.hypot(x - hm.pos[0], z - hm.pos[2]));
+    h = h + (hm.pos[1] - 0.02 - h) * w;
+  }
+
   // Small landings at both ends of the bridge.
   for (const [bx, bz, by] of [
     [BRIDGE.from[0], BRIDGE.from[1], BRIDGE.fromY],
@@ -304,6 +311,112 @@ function groundNoTrail(x: number, z: number) {
   }
 
   return h;
+}
+
+// ---------- Homes and the stream ----------
+// They sit here because they need the trail and stops to keep clear of, and the
+// trail's height in turn needs the ground they flatten.
+
+export type Home = {
+  /** Centre of the house's flat ground. */
+  pos: [number, number, number];
+  /** Which way the front faces (radians, 0 = toward the viewer). */
+  rot: number;
+  /** Which style of house (0, 1 or 2). */
+  kind: number;
+};
+
+/** Farmhouses among the terraced fields. Filled in by placeHomes() below. */
+export const HOMES: Home[] = [];
+const HOME_RADIUS = 0.62;
+
+/** Where the stream runs: a point `a` metres down the ravine from the bridge's middle. */
+function streamXZ(a: number): [number, number] {
+  const mx = (BRIDGE.from[0] + BRIDGE.to[0]) / 2, mz = (BRIDGE.from[1] + BRIDGE.to[1]) / 2;
+  const dx = BRIDGE.to[0] - BRIDGE.from[0], dz = BRIDGE.to[1] - BRIDGE.from[1];
+  const len = Math.hypot(dx, dz);
+  let nx = -dz / len, nz = dx / len; // across the bridge: down the hill
+  if (nz < 0) (nx = -nx), (nz = -nz);
+  const sway = Math.sin(a * 0.8 + 0.6) * 0.2; // a gentle meander
+  return [mx + nx * a + (dx / len) * sway, mz + nz * a + (dz / len) * sway];
+}
+
+/** The stream starts up near the snow and ends in a pond. a is measured from the bridge's middle. */
+const STREAM_A0 = -4.4;
+const STREAM_A1 = 3.0;
+
+function placeHomes() {
+  let seed = 11;
+  const rnd = () => {
+    seed = (seed * 16807) % 2147483647;
+    return seed / 2147483647;
+  };
+  const streamPts = Array.from({ length: 40 }, (_, i) => streamXZ(STREAM_A0 + ((STREAM_A1 - STREAM_A0) * i) / 39));
+  // Two hamlets on the big terraced hillsides, and two houses higher up.
+  const anchors: Array<[number, number, number]> = [
+    [-6.4, 3.2, 4],
+    [7.6, 0.8, 4],
+    [-4.2, -6.6, 2],
+  ];
+  for (const [ax, az, want] of anchors) {
+    let placed = 0;
+    for (let tries = 0; tries < 600 && placed < want; tries++) {
+      const ang = rnd() * Math.PI * 2, r = 0.4 + rnd() * 3.2;
+      const x = ax + Math.cos(ang) * r, z = az + Math.sin(ang) * r;
+      if (terraceAmount(x, z) < 0.5) continue; // on the farmland only
+      // Gentle ground only.
+      const g = Math.hypot(baseHeight(x + 0.5, z) - baseHeight(x - 0.5, z), baseHeight(x, z + 0.5) - baseHeight(x, z - 0.5));
+      if (g > 0.7) continue;
+      if (TRAIL.some((t) => Math.hypot(x - t[0], z - t[2]) < 1.6)) continue;
+      if (TRAIL_ORDER.some((id) => Math.hypot(x - STOPS[id].pos[0], z - STOPS[id].pos[2]) < STOPS[id].radius + 1.8)) continue;
+      if (streamPts.some(([sx, sz]) => Math.hypot(x - sx, z - sz) < 2.0)) continue;
+      if (HOMES.some((h) => Math.hypot(x - h.pos[0], z - h.pos[2]) < 1.9)) continue;
+      const faceAway = Math.atan2(x - SUMMIT[0], z - SUMMIT[1]);
+      HOMES.push({ pos: [x, groundAverage(x, z, 0.4), z], rot: faceAway + (rnd() - 0.5) * 0.7, kind: HOMES.length % 3 });
+      placed++;
+    }
+  }
+}
+placeHomes();
+
+/** One point along the stream: where the water surface is, and how wide. */
+export type StreamPoint = { x: number; y: number; z: number; w: number };
+
+/**
+ * The stream: it runs down the ravine under the bridge, a cascade over the steep
+ * ground and then into a pond. The water only ever runs downhill, and the ground
+ * is cut into a groove to hold it (see terrainHeight).
+ */
+export const STREAM: StreamPoint[] = (() => {
+  const n = Math.round((STREAM_A1 - STREAM_A0) / 0.12);
+  const xz = Array.from({ length: n + 1 }, (_, i) => streamXZ(STREAM_A0 + ((STREAM_A1 - STREAM_A0) * i) / n));
+  let y = xz.map(([x, z]) => groundNoTrail(x, z));
+  for (let pass = 0; pass < 2; pass++) {
+    y = y.map((_, i) => {
+      let sum = 0, count = 0;
+      for (let k = -5; k <= 5; k++) {
+        const j = i + k;
+        if (j >= 0 && j <= n) (sum += y[j]), count++;
+      }
+      return sum / count;
+    });
+  }
+  for (let i = 1; i <= n; i++) y[i] = Math.min(y[i], y[i - 1] - 0.004);
+  return xz.map(([x, z], i) => ({ x, z, y: y[i] - 0.07, w: 0.34 + 0.3 * smooth(0, 1, i / n) }));
+})();
+
+/** The pond the stream ends in. */
+export const POND = (() => {
+  const a = STREAM[STREAM.length - 1], b = STREAM[STREAM.length - 6];
+  const dx = a.x - b.x, dz = a.z - b.z, len = Math.hypot(dx, dz) || 1;
+  return { x: a.x + (dx / len) * 0.4, z: a.z + (dz / len) * 0.4, y: a.y - 0.01, r: 0.9 };
+})();
+
+/** True if (x, z) is on a house plot, the stream or the pond (to keep trees and rocks off them). */
+export function isBlocked(x: number, z: number, margin = 0) {
+  for (const h of HOMES) if (Math.hypot(x - h.pos[0], z - h.pos[2]) < HOME_RADIUS + 0.5 + margin) return true;
+  for (const s of STREAM) if (Math.hypot(x - s.x, z - s.z) < s.w + 0.45 + margin) return true;
+  return Math.hypot(x - POND.x, z - POND.z) < POND.r + 0.6 + margin;
 }
 
 // Lay the trail on the ground. Its height follows the hill, smoothed so it
@@ -360,7 +473,24 @@ export function terrainHeight(x: number, z: number) {
     bestY = end[1];
   }
   const trailW = 1 - smooth(0.3, 1.3, Math.sqrt(best));
-  return h + (bestY - 0.02 - h) * trailW;
+  let out = h + (bestY - 0.02 - h) * trailW;
+
+  // Stream: a groove for the water to run in, and a basin for the pond.
+  let sBest = Infinity, sy = 0, sw = 0;
+  for (const sp of STREAM) {
+    const dd = (x - sp.x) ** 2 + (z - sp.z) ** 2;
+    if (dd < sBest) (sBest = dd), (sy = sp.y), (sw = sp.w);
+  }
+  if (sBest < 2.5) {
+    const w = 1 - smooth(sw * 0.5 + 0.14, sw * 0.5 + 0.9, Math.sqrt(sBest));
+    out += (Math.min(out, sy - 0.05) - out) * w;
+  }
+  const dp = Math.hypot(x - POND.x, z - POND.z);
+  if (dp < POND.r + 0.8) {
+    const w = 1 - smooth(POND.r * 0.7, POND.r + 0.8, dp);
+    out += (Math.min(out, POND.y - 0.07) - out) * w;
+  }
+  return out;
 }
 
 /** Point on the trail at t (0 = teahouse, 1 = summit), just above the ground. */
