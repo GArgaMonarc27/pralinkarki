@@ -27,7 +27,7 @@ export const VIEWS = {
   /** Explore mode on narrow screens: further back. */
   exploreNarrow: { pos: [-3, 12, 28], target: [1.4, 4.2, -5] } as View,
   /** End of the scroll into Projects: climbs toward base camp. */
-  scrollEnd: { pos: [9.5, 8.4, -3.2], target: [5.2, 6.2, -8.8] } as View,
+  scrollEnd: { pos: [9.8, 9.6, -3.4], target: [5.2, 7.5, -8.9] } as View,
 };
 
 /**
@@ -51,8 +51,9 @@ export const FOCUS_VIEWS: Record<HotspotId, View> = Object.fromEntries(
     return [
       id,
       {
-        pos: [x + Math.sin(a) * back - back * 0.2, y + 1.7, z + Math.cos(a) * back],
-        target: [x, y + 0.7, z],
+        pos: [x + Math.sin(a) * back - back * 0.2, y + (id === "contact" ? 2.1 : 1.7), z + Math.cos(a) * back * (id === "contact" ? 1.35 : 1)],
+        // The summit's tall flagpole needs the camera aimed higher.
+        target: [x, y + (id === "contact" ? 1.5 : 0.7), z],
       } as View,
     ];
   }),

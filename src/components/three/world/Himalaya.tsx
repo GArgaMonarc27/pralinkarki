@@ -5,7 +5,7 @@ import { useFrame } from "@react-three/fiber";
 import { Line, useTexture } from "@react-three/drei";
 import * as THREE from "three";
 import { profile } from "@/data/profile";
-import { BRIDGE, DECK_SAG, STOPS, TRAIL, bridgeDeckY, fbm, ridged, smooth, terrainHeight, trailPoint } from "@/lib/terrain";
+import { BRIDGE, DECK_SAG, STOPS, TRAIL, bridgeDeckY, fbm, ridged, smooth, TERRACE_RISER, terraceAmount, terraceFraction, terrainHeight, trailPoint } from "@/lib/terrain";
 import { HoverOutline, Interactive } from "./Interactive";
 import { sceneLight } from "../sceneLight";
 import type { HotspotId } from "@/data/hotspots";
@@ -15,13 +15,19 @@ import type { HotspotId } from "@/data/hotspots";
 // Everything is built in code: no model downloads.
 // ============================================
 const C = {
-  valley: "#3d5240",
-  grass: "#56784a",
-  meadow: "#7a7a4c",
-  scree: "#83786c",
-  rock: "#6d6a6c",
-  rockDark: "#4d4a52",
-  snow: "#eef1f7",
+  valley: "#3f5a42",
+  grass: "#5a7c47",
+  olive: "#6f7a48",
+  meadow: "#847f51",
+  scree: "#867a6c",
+  rock: "#6f6b6e",
+  rockDark: "#4f4b55",
+  snow: "#eef2fa",
+  cropGreen: "#6a9150",
+  cropGold: "#a9a257",
+  earth: "#66703f",
+  nepalRed: "#DC143C",
+  nepalBlue: "#003893",
   trail: "#a38b69",
   wood: "#6b4a32",
   woodDark: "#4a3222",
@@ -57,38 +63,64 @@ type V3 = [number, number, number];
 
 // ---------- Ground ----------
 
-/** The mountain the trail climbs. Sinks into the clouds at its edges. */
-const NEAR = { cx: 1.5, cz: -5, size: 40 };
+/** The mountain the trail climbs. At its edges it melts into the far ranges. */
+const NEAR = { cx: 1.5, cz: -5, half: 21 };
+const boxDist = (x: number, z: number) => Math.max(Math.abs(x - NEAR.cx), Math.abs(z - NEAR.cz));
+
+/** The great peaks of the Himalaya, standing far back in the haze. */
+const PEAKS = [
+  { x: -16, z: -58, h: 25, r: 30 },
+  { x: 10, z: -66, h: 29, r: 34 },
+  { x: 38, z: -54, h: 24, r: 28 },
+  { x: -42, z: -44, h: 18, r: 24 },
+  { x: 58, z: -30, h: 15, r: 24 },
+  { x: -58, z: -20, h: 13, r: 22 },
+  { x: 24, z: -92, h: 34, r: 40 },
+];
+const VALLEY_FLOOR = -7.9;
+
+/** Height of the distant ranges. Flat valley floor under the near mountain. */
+function farHeight(x: number, z: number) {
+  const out = smooth(18, 26, boxDist(x, z));
+  if (out === 0) return VALLEY_FLOOR;
+  // Keep the view open toward the camera.
+  const front = 1 - smooth(-4, 14, z);
+  let peaks = 0;
+  for (const p of PEAKS) {
+    const u = Math.max(0, 1 - Math.hypot(x - p.x, z - p.z) / p.r);
+    peaks = Math.max(peaks, p.h * Math.pow(u, 1.25) * (0.7 + 0.5 * ridged(x * 0.07 + p.x, z * 0.07 + p.z, 3)));
+  }
+  const foothills = (2.2 + ridged(x * 0.05, z * 0.05, 3) * 6) * smooth(20, 44, Math.hypot(x - NEAR.cx, (z - NEAR.cz) * 0.9));
+  return VALLEY_FLOOR + out * (front * Math.max(foothills, peaks) + fbm(x * 0.03, z * 0.03, 3) * 1.2);
+}
 
 function nearHeight(x: number, z: number) {
-  const edge = smooth(13, 20, Math.max(Math.abs(x - NEAR.cx), Math.abs(z - NEAR.cz)));
+  const edge = smooth(14, NEAR.half, boxDist(x, z));
   const h = terrainHeight(x, z);
-  return h + (-7 - h) * edge;
+  return edge === 0 ? h : h + (farHeight(x, z) - h) * edge;
 }
 
-/** The great peaks around the trek, standing in the haze. */
-function farHeight(x: number, z: number) {
-  const d = Math.hypot(x - NEAR.cx, (z - NEAR.cz) * 0.85);
-  const ring = smooth(25, 42, d);
-  const front = 1 - smooth(-6, 16, z); // keep the view open toward the camera
-  // Rounded shoulders with a few sharper summits on top.
-  const peaks = 2 + (ridged(x * 0.04 + 7, z * 0.04 - 3, 3) * 0.55 + (fbm(x * 0.05, z * 0.05, 3) + 0.5) * 0.6) * 17;
-  return -8 + ring * front * peaks;
-}
+const tmpA = new THREE.Color();
 
-function groundColor(h: number, ny: number, x: number, z: number, snowLine: number, out: THREE.Color) {
+function groundColor(h: number, ny: number, x: number, z: number, snowLine: number, tw: number, frac: number, out: THREE.Color) {
   const n = fbm(x * 0.6 + 11, z * 0.6, 2);
-  const line = snowLine + n * 1.4;
-  if ((h > line && ny > 0.45) || h > line + 3) out.set(C.snow).offsetHSL(0, 0, n * 0.05);
-  else if (ny < 0.58) out.set(n > 0 ? C.rock : C.rockDark);
-  else if (h < -1.5) out.set(C.valley);
-  else if (h < 1.4) out.set(C.grass);
-  else if (h < 3.9) out.set(C.meadow);
-  else out.set(C.scree);
-  return out.offsetHSL(0, 0, n * 0.035);
+  const m = fbm(x * 0.11 + 4, z * 0.11 - 7, 2); // broad patches of colour
+  const line = snowLine + n * 1.6;
+  if ((h > line && ny > 0.5) || h > line + 3.5) out.set(C.snow).offsetHSL(0, 0, n * 0.04);
+  else if (ny < 0.6) out.set(n > 0.05 ? C.rock : C.rockDark);
+  else if (tw > 0.25 && frac < TERRACE_RISER) out.set(C.cropGreen).lerp(tmpA.set(C.cropGold), smooth(-0.12, 0.22, m));
+  else if (tw > 0.25) out.set(C.earth);
+  else if (h < -3.5) out.set(C.valley);
+  else if (h < 2.4) out.set(C.grass).lerp(tmpA.set(C.olive), smooth(-0.3, 0.5, m) * 0.7);
+  else if (h < 6.4) out.set(C.olive).lerp(tmpA.set(C.meadow), smooth(-0.3, 0.5, m) * 0.8);
+  else out.set(C.scree).lerp(tmpA.set(C.rock), smooth(0.0, 0.5, n));
+  return out.offsetHSL(0, 0, n * 0.05 + fbm(x * 1.7, z * 1.7, 2) * 0.03);
 }
 
-/** Heightfield with one flat colour per triangle (the low-poly look). */
+/**
+ * Heightfield with smooth shading and a colour at every point. `skip` leaves
+ * out cells (used to cut a hole in the far ground under the near mountain).
+ */
 function buildGround(
   cx: number,
   cz: number,
@@ -96,40 +128,57 @@ function buildGround(
   segs: number,
   height: (x: number, z: number) => number,
   snowLine: number,
+  skip?: (x0: number, z0: number, x1: number, z1: number) => boolean,
 ) {
-  const g = new THREE.PlaneGeometry(size, size, segs, segs);
-  g.rotateX(-Math.PI / 2);
-  g.translate(cx, 0, cz);
-  const p = g.attributes.position;
-  for (let i = 0; i < p.count; i++) p.setY(i, height(p.getX(i), p.getZ(i)));
-  const flat = g.toNonIndexed();
-  g.dispose();
-  flat.computeVertexNormals();
-  const fp = flat.attributes.position;
-  const fn = flat.attributes.normal;
-  const colors = new Float32Array(fp.count * 3);
+  const n = segs + 1;
+  const step = size / segs;
+  const pos = new Float32Array(n * n * 3);
+  for (let j = 0; j < n; j++)
+    for (let i = 0; i < n; i++) {
+      const x = cx - size / 2 + i * step, z = cz - size / 2 + j * step;
+      pos.set([x, height(x, z), z], (j * n + i) * 3);
+    }
+  const idx: number[] = [];
+  for (let j = 0; j < segs; j++)
+    for (let i = 0; i < segs; i++) {
+      const x0 = cx - size / 2 + i * step, z0 = cz - size / 2 + j * step;
+      if (skip?.(x0, z0, x0 + step, z0 + step)) continue;
+      const a = j * n + i, b = a + 1, c = a + n, d = c + 1;
+      idx.push(a, c, b, b, c, d);
+    }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  const normals = g.attributes.normal;
+  const colors = new Float32Array(n * n * 3);
   const c = new THREE.Color();
-  for (let i = 0; i < fp.count; i += 3) {
-    const x = (fp.getX(i) + fp.getX(i + 1) + fp.getX(i + 2)) / 3;
-    const y = (fp.getY(i) + fp.getY(i + 1) + fp.getY(i + 2)) / 3;
-    const z = (fp.getZ(i) + fp.getZ(i + 1) + fp.getZ(i + 2)) / 3;
-    groundColor(y, fn.getY(i), x, z, snowLine, c);
-    for (let k = 0; k < 3; k++) colors.set([c.r, c.g, c.b], (i + k) * 3);
+  for (let v = 0; v < n * n; v++) {
+    const x = pos[v * 3], y = pos[v * 3 + 1], z = pos[v * 3 + 2];
+    const tw = terraceAmount(x, z);
+    groundColor(y, normals.getY(v), x, z, snowLine, tw, tw > 0.25 ? terraceFraction(x, z) : 0, c);
+    colors.set([c.r, c.g, c.b], v * 3);
   }
-  flat.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-  return flat;
+  g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  return g;
 }
 
 function Ground({ detail }: { detail: number }) {
-  const near = useMemo(() => buildGround(NEAR.cx, NEAR.cz, NEAR.size, detail, nearHeight, 6.2), [detail]);
-  const far = useMemo(() => buildGround(NEAR.cx, -16, 180, Math.round(detail * 0.7), farHeight, 7), [detail]);
+  const near = useMemo(() => buildGround(NEAR.cx, NEAR.cz, NEAR.half * 2, detail, nearHeight, 7.6), [detail]);
+  const far = useMemo(
+    () =>
+      buildGround(NEAR.cx, -16, 180, Math.round(detail * 0.75), farHeight, 11, (x0, z0, x1, z1) =>
+        Math.max(boxDist(x0, z0), boxDist(x1, z1), boxDist(x0, z1), boxDist(x1, z0)) < NEAR.half - 1.5,
+      ),
+    [detail],
+  );
   return (
     <>
       <mesh geometry={near} receiveShadow castShadow>
-        <meshStandardMaterial vertexColors roughness={0.95} flatShading />
+        <meshStandardMaterial vertexColors roughness={0.95} />
       </mesh>
       <mesh geometry={far}>
-        <meshStandardMaterial vertexColors roughness={1} flatShading />
+        <meshStandardMaterial vertexColors roughness={1} />
       </mesh>
     </>
   );
@@ -142,7 +191,7 @@ const onBridge = (p: V3) => p[1] - terrainHeight(p[0], p[2]) > 0.6;
 
 function Trail() {
   const geo = useMemo(() => {
-    const W = 0.2;
+    const W0 = 0.2;
     const pos: number[] = [];
     const idx: number[] = [];
     const gap: boolean[] = [];
@@ -153,6 +202,8 @@ function Trail() {
       tx /= l;
       tz /= l;
       const [x, , z] = TRAIL[i];
+      // Narrow to nothing at both ends, so the path fades into the ground.
+      const W = W0 * Math.min(1, (i + 1) / 10, (TRAIL.length - i) / 10);
       const lx = x - tz * W, lz = z + tx * W, rx = x + tz * W, rz = z - tx * W;
       pos.push(lx, terrainHeight(lx, lz) + 0.05, lz, rx, terrainHeight(rx, rz) + 0.05, rz);
       gap.push(onBridge(TRAIL[i]));
@@ -429,6 +480,125 @@ function PrayerFlags({
   );
 }
 
+// ---------- The flag of Nepal ----------
+
+/** Width over height of the flag's drawing (see the official construction). */
+const NEPAL_FLAG_ASPECT = 71.571 / 87.246;
+
+/**
+ * The national flag of Nepal, drawn from its official construction (Schedule 1
+ * of the Constitution): two stacked pennons in crimson with a deep blue border,
+ * a white moon above and a white sun below. It is the only flag in the world
+ * that is not a rectangle.
+ */
+function useNepalFlagTexture() {
+  return useMemo(() => {
+    const W = 512, H = 624;
+    const canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d")!;
+    const k = W / 71.571;
+    // Same view box as the official drawing: -17.582 -4.664 71.571 87.246.
+    ctx.setTransform(k, 0, 0, k, 17.582 * k, 4.664 * k);
+    const outline = new Path2D("M -15,37.5735931288 h 60 L -15,0 v 80 h 60 L -15,20 z");
+    ctx.lineJoin = "miter";
+    ctx.miterLimit = 4;
+    ctx.lineWidth = 5.165;
+    ctx.strokeStyle = C.nepalBlue;
+    ctx.stroke(outline);
+    ctx.fillStyle = C.nepalRed;
+    ctx.fill(outline);
+
+    ctx.fillStyle = "#ffffff";
+    const rad = Math.PI / 180;
+    // The moon: a crescent, with a small sun-like star in its bowl.
+    ctx.fill(
+      new Path2D(
+        "M -11.9502769431,23.4834957055 A 12.8400974233,12.8400974233 0 0,0 11.9502769431,23.4834957055 A 11.9502769431,11.9502769431 0 0,1 -11.9502769431,23.4834957055",
+      ),
+    );
+    ctx.save();
+    ctx.translate(0, 29.045);
+    ctx.scale(5.56106, 5.56106);
+    ctx.beginPath();
+    ctx.arc(0, 0, 1, 0, Math.PI * 2);
+    ctx.fill();
+    const moonRay = new Path2D("M 0.195090322016,-0.980785280403 L 0,-1.38878410975 L -0.195090322016,-0.980785280403");
+    for (const a of [11.25, 33.75, 56.25, 78.75, 101.25, 123.75]) {
+      for (const sign of [1, -1]) {
+        ctx.save();
+        ctx.rotate(a * sign * rad);
+        ctx.fill(moonRay);
+        ctx.restore();
+      }
+    }
+    ctx.restore();
+    // The sun: a disc with twelve rays.
+    ctx.save();
+    ctx.translate(0, 58.787);
+    ctx.scale(8.1434, 8.1434);
+    ctx.beginPath();
+    ctx.arc(0, 0, 1, 0, Math.PI * 2);
+    ctx.fill();
+    const sunRay = new Path2D("M 0.258819045103,0.965925826289 L 0,1.576749285537 L -0.258819045103,0.965925826289");
+    for (let i = 0; i < 12; i++) {
+      ctx.save();
+      ctx.rotate(i * 30 * rad);
+      ctx.fill(sunRay);
+      ctx.restore();
+    }
+    ctx.restore();
+
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    return tex;
+  }, []);
+}
+
+/**
+ * A waving flag of Nepal with its hoist at the origin, hanging from the top-left
+ * corner and flying toward +x. `height` is how tall it is in metres.
+ */
+function NepalFlag({ height, still, seed = 0 }: { height: number; still: boolean; seed?: number }) {
+  const tex = useNepalFlagTexture();
+  const width = height * NEPAL_FLAG_ASPECT;
+  const geo = useMemo(() => {
+    const g = new THREE.PlaneGeometry(width, height, 12, 16);
+    g.translate(width / 2, -height / 2, 0);
+    return g;
+  }, [width, height]);
+  const base = useMemo(() => Float32Array.from(geo.attributes.position.array), [geo]);
+  const material = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        map: tex,
+        alphaTest: 0.5,
+        side: THREE.DoubleSide,
+        roughness: 0.85,
+        emissive: new THREE.Color("#ffffff"),
+        emissiveMap: tex,
+        emissiveIntensity: 0.2,
+      }),
+    [tex],
+  );
+  useFrame(({ clock }) => {
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const t = still ? 0.6 : clock.elapsedTime;
+    for (let i = 0; i < pos.count; i++) {
+      const x = base[i * 3], y = base[i * 3 + 1];
+      const u = x / width; // 0 at the pole, 1 at the free edge
+      const wave = Math.sin(u * 6 - t * 3.2 + seed + y * 1.3) * 0.11 * height * u;
+      const ripple = Math.sin(u * 11 - t * 5.4 + y * 2.2) * 0.025 * height * u;
+      pos.setXYZ(i, x - Math.abs(wave) * 0.12, y - u * u * 0.05 * height, wave + ripple);
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+  });
+  return <mesh geometry={geo} material={material} castShadow frustumCulled={false} />;
+}
+
 // ---------- Small pieces ----------
 
 function Pine({ pos, scale = 1, seed = 0 }: { pos: V3; scale?: number; seed?: number }) {
@@ -606,6 +776,14 @@ function Teahouse({ still }: { still: boolean }) {
           <coneGeometry args={[0.85, 0.55, 4]} />
           <meshStandardMaterial color={C.slate} roughness={0.8} flatShading />
         </mesh>
+        {/* A small flag of Nepal on the roof */}
+        <mesh position={[-0.35, 1.62, 0.1]} castShadow>
+          <cylinderGeometry args={[0.012, 0.016, 0.62, 5]} />
+          <meshStandardMaterial color={C.woodDark} />
+        </mesh>
+        <group position={[-0.34, 1.91, 0.1]}>
+          <NepalFlag height={0.3} still={still} seed={1.5} />
+        </group>
         {/* Chimney and its smoke */}
         <mesh position={[0.45, 1.25, -0.2]} castShadow>
           <boxGeometry args={[0.16, 0.45, 0.16]} />
@@ -880,7 +1058,11 @@ function Gompa({ still }: { still: boolean }) {
 }
 
 /** Work → a swaying suspension bridge over the gorge, strung with prayer flags. */
-const BRIDGE_MID: V3 = [(BRIDGE.from[0] + BRIDGE.to[0]) / 2, BRIDGE.height, (BRIDGE.from[1] + BRIDGE.to[1]) / 2];
+const BRIDGE_MID: V3 = [
+  (BRIDGE.from[0] + BRIDGE.to[0]) / 2,
+  (BRIDGE.fromY + BRIDGE.toY) / 2,
+  (BRIDGE.from[1] + BRIDGE.to[1]) / 2,
+];
 
 function Bridge({ still }: { still: boolean }) {
   const mid = BRIDGE_MID;
@@ -892,14 +1074,17 @@ function Bridge({ still }: { still: boolean }) {
     const nx = -uz, nz = ux;
     const W = 0.32;
     const POST = 0.95, CABLE_SAG = 0.75;
-    const deck = (t: number): V3 => [ax + (bx - ax) * t, -DECK_SAG * 4 * t * (1 - t), az + (bz - az) * t];
+    // One end of the bridge is a little higher up the hill than the other.
+    const rise = BRIDGE.toY - BRIDGE.fromY;
+    const deck = (t: number): V3 => [ax + (bx - ax) * t, rise * (t - 0.5) - DECK_SAG * 4 * t * (1 - t), az + (bz - az) * t];
     const cable = (side: number, t: number): V3 => [
       ax + (bx - ax) * t + nx * W * side,
-      POST - CABLE_SAG * 4 * t * (1 - t),
+      POST + rise * (t - 0.5) - CABLE_SAG * 4 * t * (1 - t),
       az + (bz - az) * t + nz * W * side,
     ];
     const posts: V3[] = [];
-    for (const side of [-1, 1]) for (const [x, z] of [[ax, az], [bx, bz]]) posts.push([x + nx * W * side, 0, z + nz * W * side]);
+    for (const side of [-1, 1])
+      for (const [x, z, y] of [[ax, az, -rise / 2], [bx, bz, rise / 2]]) posts.push([x + nx * W * side, y, z + nz * W * side]);
     const cables = [-1, 1].map((side) => Array.from({ length: 17 }, (_, i) => cable(side, i / 16)));
     // Hangers from cable down to the deck edge.
     const hangers: V3[] = [];
@@ -956,7 +1141,7 @@ function Bridge({ still }: { still: boolean }) {
           <PrayerFlags from={geo.cables[1][0]} to={geo.cables[1][16]} sag={geo.CABLE_SAG} count={20} size={0.11} still={still} seed={2} />
         </group>
         {geo.posts.map((p, i) => (
-          <mesh key={i} position={[p[0], geo.POST / 2 - 0.15, p[2]]} castShadow>
+          <mesh key={i} position={[p[0], p[1] + geo.POST / 2 - 0.15, p[2]]} castShadow>
             <boxGeometry args={[0.09, geo.POST + 0.3, 0.09]} />
             <meshStandardMaterial color={C.woodDark} roughness={0.9} />
             <HoverOutline thickness={0.01} />
@@ -1074,7 +1259,7 @@ function BaseCamp({ still }: { still: boolean }) {
   );
 }
 
-/** Contact → the summit: a cairn, prayer flags, and a beacon sending out a signal. */
+/** Contact → the summit: a cairn, the flag of Nepal, prayer flags, and a beacon sending out a signal. */
 function Summit({ still }: { still: boolean }) {
   const orb = useRef<THREE.MeshBasicMaterial>(null);
   const rings = useRef<THREE.Group>(null);
@@ -1088,18 +1273,27 @@ function Summit({ still }: { still: boolean }) {
       ((r as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = (1 - k) * 0.6 * sceneLight.level;
     });
   });
-  const top: V3 = [0, 1.45, 0];
+  const POLE = 2.7;
+  const top: V3 = [0, 1.3, 0];
   return (
     <>
       {/* Cairn */}
       {[0.32, 0.25, 0.19, 0.14, 0.1].map((s, i) => (
         <Stone key={i} pos={[0.35, 0.08 + i * 0.15, 0.25]} size={s} seed={i + 3} color={i % 2 ? C.rock : C.rockDark} />
       ))}
-      <mesh position-y={0.72} castShadow>
-        <cylinderGeometry args={[0.025, 0.035, 1.45, 6]} />
+      {/* Flagpole with the national flag */}
+      <mesh position-y={POLE / 2} castShadow>
+        <cylinderGeometry args={[0.025, 0.04, POLE, 6]} />
         <meshStandardMaterial color={C.wood} />
         <HoverOutline thickness={0.01} />
       </mesh>
+      <mesh position-y={POLE + 0.03} castShadow>
+        <sphereGeometry args={[0.045, 8, 8]} />
+        <meshStandardMaterial color={C.gold} metalness={0.6} roughness={0.35} />
+      </mesh>
+      <group position={[0.02, POLE - 0.06, 0]}>
+        <NepalFlag height={1.15} still={still} />
+      </group>
       {[0, 1, 2, 3, 4].map((i) => {
         const a = (i / 5) * Math.PI * 2 + 0.3;
         return (
@@ -1115,12 +1309,12 @@ function Summit({ still }: { still: boolean }) {
           />
         );
       })}
-      {/* Beacon */}
-      <mesh position={[0, 1.55, 0]}>
+      {/* Beacon, above the flag */}
+      <mesh position={[0, POLE + 0.25, 0]}>
         <icosahedronGeometry args={[0.09, 1]} />
         <meshBasicMaterial ref={orb} color={C.accent} toneMapped={false} transparent />
       </mesh>
-      <group ref={rings} position={[0, 1.55, 0]}>
+      <group ref={rings} position={[0, POLE + 0.25, 0]}>
         {[0, 1, 2].map((i) => (
           <mesh key={i} rotation-x={-Math.PI / 2}>
             <ringGeometry args={[0.95, 1, 48]} />
@@ -1142,11 +1336,13 @@ function Forest({ count }: { count: number }) {
     const out: Array<{ p: V3; s: number; r: number; c: number }> = [];
     let tries = 0;
     while (out.length < count && tries++ < count * 30) {
-      const x = -14 + rnd() * 30, z = -18 + rnd() * 30;
+      const x = -16 + rnd() * 34, z = -22 + rnd() * 34;
       const h = nearHeight(x, z);
-      if (h < -2.6 || h > 3.4) continue;
+      if (h < -3.2 || h > 6.4) continue;
+      // Thinner toward the tree line, and never in the farmers' terraces.
+      if (rnd() > 1 - smooth(2.5, 6.4, h) || terraceAmount(x, z) > 0.2) continue;
       const slope = Math.abs(nearHeight(x + 0.3, z) - h) + Math.abs(nearHeight(x, z + 0.3) - h);
-      if (slope > 0.32) continue;
+      if (slope > 0.5) continue;
       let clear = true;
       for (let i = 0; i < TRAIL.length && clear; i += 3) if (Math.hypot(x - TRAIL[i][0], z - TRAIL[i][2]) < 0.75) clear = false;
       for (const s of Object.values(STOPS)) if (Math.hypot(x - s.pos[0], z - s.pos[2]) < s.radius + 0.5) clear = false;
@@ -1192,6 +1388,99 @@ function Forest({ count }: { count: number }) {
   );
 }
 
+/** Boulders and crags scattered on the steeper ground, so the slopes are not bare. */
+function Boulders({ count }: { count: number }) {
+  const ref = useRef<THREE.InstancedMesh>(null);
+  const rocks = useMemo(() => {
+    const rnd = seeded(57);
+    const out: Array<{ p: V3; s: number; r: number; tone: number }> = [];
+    let tries = 0;
+    while (out.length < count && tries++ < count * 60) {
+      const x = -15 + rnd() * 32, z = -21 + rnd() * 33;
+      const h = nearHeight(x, z);
+      if (h < -3 || h > 7) continue;
+      const slope = Math.abs(nearHeight(x + 0.3, z) - h) + Math.abs(nearHeight(x, z + 0.3) - h);
+      if (slope < 0.28 || terraceAmount(x, z) > 0.2) continue;
+      let clear = true;
+      for (let i = 0; i < TRAIL.length && clear; i += 3) if (Math.hypot(x - TRAIL[i][0], z - TRAIL[i][2]) < 0.6) clear = false;
+      for (const st of Object.values(STOPS)) if (Math.hypot(x - st.pos[0], z - st.pos[2]) < st.radius + 0.4) clear = false;
+      if (!clear) continue;
+      out.push({ p: [x, h, z], s: 0.08 + rnd() * rnd() * 0.3, r: rnd() * 6, tone: rnd() });
+    }
+    return out;
+  }, [count]);
+  useLayoutEffect(() => {
+    const m = ref.current;
+    if (!m) return;
+    const o = new THREE.Object3D();
+    const col = new THREE.Color();
+    rocks.forEach((r, i) => {
+      o.position.set(r.p[0], r.p[1] + r.s * 0.25, r.p[2]);
+      o.scale.set(r.s * 1.2, r.s * 0.8, r.s);
+      o.rotation.set(r.r, r.r * 2, r.r * 0.5);
+      o.updateMatrix();
+      m.setMatrixAt(i, o.matrix);
+      m.setColorAt(i, col.set(C.rock).lerp(tmpA.set(C.rockDark), r.tone));
+    });
+    m.count = rocks.length;
+    m.instanceMatrix.needsUpdate = true;
+    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+  }, [rocks]);
+  return (
+    <instancedMesh ref={ref} args={[undefined, undefined, count]} castShadow receiveShadow>
+      <dodecahedronGeometry args={[1, 0]} />
+      <meshStandardMaterial roughness={0.95} flatShading />
+    </instancedMesh>
+  );
+}
+
+/** Rhododendron (Nepal's national flower) and hardy bushes dotting the hillsides. */
+function Shrubs({ count }: { count: number }) {
+  const ref = useRef<THREE.InstancedMesh>(null);
+  const bushes = useMemo(() => {
+    const rnd = seeded(31);
+    const colors = ["#c8304c", "#e0526a", "#d6862f", "#6f8f3f", "#8a9a48", "#b53a52"];
+    const out: Array<{ p: V3; s: number; c: string }> = [];
+    let tries = 0;
+    while (out.length < count && tries++ < count * 40) {
+      const x = -15 + rnd() * 32, z = -20 + rnd() * 32;
+      const h = nearHeight(x, z);
+      if (h < -2.5 || h > 7.2 || terraceAmount(x, z) > 0.3) continue;
+      const slope = Math.abs(nearHeight(x + 0.3, z) - h) + Math.abs(nearHeight(x, z + 0.3) - h);
+      if (slope > 0.55) continue;
+      let clear = true;
+      for (let i = 0; i < TRAIL.length && clear; i += 3) if (Math.hypot(x - TRAIL[i][0], z - TRAIL[i][2]) < 0.5) clear = false;
+      for (const st of Object.values(STOPS)) if (Math.hypot(x - st.pos[0], z - st.pos[2]) < st.radius + 0.3) clear = false;
+      if (!clear) continue;
+      out.push({ p: [x, h, z], s: 0.7 + rnd() * 0.9, c: colors[Math.floor(rnd() * colors.length)] });
+    }
+    return out;
+  }, [count]);
+  useLayoutEffect(() => {
+    const m = ref.current;
+    if (!m) return;
+    const o = new THREE.Object3D();
+    const col = new THREE.Color();
+    bushes.forEach((b, i) => {
+      o.position.set(b.p[0], b.p[1] + 0.05 * b.s, b.p[2]);
+      o.scale.set(b.s * 1.1, b.s * 0.75, b.s * 1.1);
+      o.rotation.set(0, b.s * 7, 0);
+      o.updateMatrix();
+      m.setMatrixAt(i, o.matrix);
+      m.setColorAt(i, col.set(b.c));
+    });
+    m.count = bushes.length;
+    m.instanceMatrix.needsUpdate = true;
+    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+  }, [bushes]);
+  return (
+    <instancedMesh ref={ref} args={[undefined, undefined, count]} castShadow>
+      <icosahedronGeometry args={[0.11, 0]} />
+      <meshStandardMaterial roughness={0.9} flatShading />
+    </instancedMesh>
+  );
+}
+
 /** A sea of cloud filling the valleys below the trail. */
 function CloudSea({ still }: { still: boolean }) {
   const puffs = useMemo(() => {
@@ -1227,7 +1516,9 @@ export function Himalaya({ reducedMotion, quality }: { reducedMotion: boolean; q
       <Ground detail={high ? 180 : 110} />
       <Trail />
       <Hiker still={still} />
-      <Forest count={high ? 260 : 140} />
+      <Forest count={high ? 520 : 260} />
+      <Boulders count={high ? 140 : 70} />
+      <Shrubs count={high ? 150 : 70} />
       <CloudSea still={still} />
 
       <Stop id="about" hit={[3.2, 1.8, 2.6]} tip={[0, 2.1, 0]}>
